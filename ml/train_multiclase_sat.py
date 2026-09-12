@@ -79,13 +79,18 @@ OTHER_LABEL_COLS = ["es_fraude"]
 
 def load_xy(features_path: Path):
     df = pd.read_csv(features_path)
-    df["dias_antiguedad_al_facturar"] = df["dias_antiguedad_al_facturar"].fillna(
-        df["dias_antiguedad_al_facturar"].median()
-    )
+    dias_median = float(df["dias_antiguedad_al_facturar"].median())
+    df["dias_antiguedad_al_facturar"] = df["dias_antiguedad_al_facturar"].fillna(dias_median)
+    categoria_values = sorted(df["categoria"].dropna().unique().tolist())
     df = pd.get_dummies(df, columns=CATEGORICAL_COLS, prefix="cat")
     drop_cols = ID_COLS + [TARGET_COL] + LEAKY_COLS + OTHER_LABEL_COLS
     feature_cols = [c for c in df.columns if c not in drop_cols]
-    return df, feature_cols
+    # Preprocessing metadata needed to reproduce this exact feature vector at
+    # inference time on a SINGLE new vendor (where get_dummies alone would
+    # only ever produce the one category column that vendor happens to have,
+    # not all the columns the model was trained on).
+    preprocess = {"dias_antiguedad_median": dias_median, "categoria_values": categoria_values}
+    return df, feature_cols, preprocess
 
 
 def split_by_estate(df: pd.DataFrame, test_frac: float, seed: int = 0):
@@ -158,7 +163,7 @@ def main():
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    df, feature_cols = load_xy(args.features)
+    df, feature_cols, preprocess = load_xy(args.features)
     train_df, test_df, test_seeds = split_by_estate(df, args.test_seeds_frac, args.random_state)
     print(f"estates train: {train_df['estate_seed'].nunique()}  "
           f"estates test (held-out): {len(test_seeds)}")
@@ -175,9 +180,19 @@ def main():
     print(f"\nCART podado: ccp_alpha={best_alpha:.6f}  hojas={cart.get_n_leaves()}  "
           f"profundidad={cart.get_depth()}  F1_macro (CV en train)={cv_f1:.4f}")
 
+    model_bundle = {
+        "model": cart,
+        "feature_names": feature_cols,
+        "classes": list(cart.classes_),
+        "ccp_alpha": best_alpha,
+        "categorical_cols": CATEGORICAL_COLS,
+        "dias_antiguedad_median": preprocess["dias_antiguedad_median"],
+        "categoria_values": preprocess["categoria_values"],
+        "target_col": TARGET_COL,
+        "leaky_cols_excluded": LEAKY_COLS,
+    }
     with open(args.out_dir / "modelo_cart_multiclase.pkl", "wb") as f:
-        pickle.dump({"model": cart, "feature_names": feature_cols, "classes": list(cart.classes_),
-                     "ccp_alpha": best_alpha}, f)
+        pickle.dump(model_bundle, f)
     print(f"  wrote {args.out_dir / 'modelo_cart_multiclase.pkl'}")
 
     y_pred_cart = cart.predict(X_test)
