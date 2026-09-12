@@ -1,0 +1,277 @@
+{
+  "seed": 31,
+  "company_rfc": "APD240705CIH",
+  "schemes": [
+    {
+      "scheme_id": "S1_phantom_vendor",
+      "type": "phantom_vendor",
+      "entities": [
+        "RFC:GCS240206325"
+      ],
+      "supporting_invoices": [
+        "602B7B6D-B8F1-348A-E354-0C3115E8DA79",
+        "28D435BD-AA29-3AD7-CD5D-112858D6515A",
+        "38D2DF6E-50A3-B840-85C3-327946539A47",
+        "F78EC808-B541-0F7F-17BB-7CBA96C0CDCD",
+        "A156A01C-CE1E-4B2E-F6CC-B9E242A2ABBD"
+      ],
+      "supporting_txns": [
+        "BNK-00087",
+        "BNK-00088",
+        "BNK-00089",
+        "BNK-00090",
+        "BNK-00091"
+      ],
+      "peso_amount": 377354.14,
+      "difficulty": "easy",
+      "_signals": [
+        "vendor en efos_list definitivo",
+        "conceptos genericos",
+        "sin contrato ni orden de compra"
+      ]
+    },
+    {
+      "scheme_id": "S2_round_tripping",
+      "type": "round_tripping",
+      "entities": [
+        "RFC:EGB170307UQA"
+      ],
+      "supporting_invoices": [
+        "F2AAA265-1A2A-D66F-5158-8263E8B2BD46"
+      ],
+      "supporting_txns": [
+        "BNK-00092",
+        "BNK-00093",
+        "BNK-00094",
+        "BNK-00095"
+      ],
+      "peso_amount": 1409021.03,
+      "difficulty": "medium",
+      "_signals": [
+        "ciclo que regresa a la CLABE de la empresa",
+        "monto se conserva casi intacto en la cadena",
+        "topologia y montos tomados de un ciclo real de AMLSim (20K_cycle200)"
+      ]
+    },
+    {
+      "scheme_id": "S3_revenue_inflation",
+      "type": "revenue_inflation",
+      "entities": [
+        "RFC:PEF071227GKW"
+      ],
+      "supporting_invoices": [
+        "52A7BC47-46F1-C604-EDB2-B1D8A9CE40C0",
+        "6E9DCAB6-5EE2-2BC9-2EAD-915C5AD5F55E",
+        "E678C9DD-4CB5-6A85-B015-4979C9912D7F"
+      ],
+      "supporting_txns": [],
+      "peso_amount": 578851.92,
+      "difficulty": "easy",
+      "_signals": [
+        "facturas de ingreso al cierre del periodo sin cobro en bank_txns",
+        "cliente nuevo, sin historial de cobro previo"
+      ]
+    },
+    {
+      "scheme_id": "S4_threshold_splitting",
+      "type": "threshold_splitting",
+      "entities": [
+        "RFC:QJV161116MVV"
+      ],
+      "supporting_invoices": [
+        "4BE087D1-1497-AC39-AC18-80D927FE431D",
+        "928F772F-A9F0-C2D1-341A-6FD3B3F4CE94",
+        "0A3550FF-9DCA-34B4-BDD8-C0C2F48462D9",
+        "EAFEAD04-5D7D-5DDC-F622-36CF99FBD7F7",
+        "3E5258F0-D3D6-65AF-60A1-8F754E8F7A3F",
+        "4677A317-EEAF-A6E3-46E6-C2FC6AA384D8",
+        "3A527D25-F66D-F8AE-AE23-996BFFE3FA11",
+        "0E50149B-8EF4-495A-2C77-5D78723F455B",
+        "9BF93E08-F716-D68A-4D90-7DCFCC819C44",
+        "F3485281-36AC-FFA9-F36F-8D4A18E454B6",
+        "C94E2FA2-E741-10D9-5099-8900A286DFC9",
+        "46A79D0E-F6B8-4609-756C-8EB9601F28B8",
+        "D21473FF-6687-950D-B289-207332AFDCCE"
+      ],
+      "supporting_txns": [
+        "BNK-00096",
+        "BNK-00097",
+        "BNK-00098",
+        "BNK-00099",
+        "BNK-00100",
+        "BNK-00101",
+        "BNK-00102",
+        "BNK-00103",
+        "BNK-00104",
+        "BNK-00105",
+        "BNK-00106",
+        "BNK-00107",
+        "BNK-00108"
+      ],
+      "peso_amount": 624483.76,
+      "difficulty": "easy",
+      "_signals": [
+        "13 ordenes justo por debajo de 50,000 MXN",
+        "mismo solicitante y aprobador",
+        "concentradas en pocas semanas"
+      ]
+    },
+    {
+      "scheme_id": "S5_kickback",
+      "type": "kickback",
+      "entities": [
+        "RFC:CXB181208ASJ",
+        "EMP:0013"
+      ],
+      "supporting_invoices": [
+        "4B368E1A-5412-6FB2-AC65-72334D57984F",
+        "106D2BA7-BCCD-16C3-4F54-29AB5D692C9F",
+        "D71D296E-78CB-E66E-4E54-E1E598F9DB40",
+        "602E7CFE-39D2-9766-C1C4-C6E960B03DF7",
+        "B562D915-CF28-5E48-8E05-54C88DEF9503"
+      ],
+      "supporting_txns": [
+        "BNK-00109",
+        "BNK-00111",
+        "BNK-00113",
+        "BNK-00115",
+        "BNK-00117",
+        "BNK-00110",
+        "BNK-00112",
+        "BNK-00114",
+        "BNK-00116",
+        "BNK-00118",
+        "BNK-00119"
+      ],
+      "peso_amount": 343725.97,
+      "difficulty": "medium",
+      "_signals": [
+        "mismo requester y approver",
+        "precio por encima de mercado",
+        "transferencias del proveedor a la CLABE del empleado, montos tomados de transacciones reales marcadas isFraud en AMLSim"
+      ]
+    }
+  ],
+  "decoys": [
+    {
+      "entity": "RFC:PBN140325IG5",
+      "signal": "below_approval_threshold_pattern",
+      "why_innocent": "La tarifa por viaje esta fijada en contrato vigente; los montos quedan bajo cualquier umbral por precio pactado, no por fraccionamiento, y el solicitante y el aprobador son distintos.",
+      "invoices": [
+        "54AF9687-3E7E-D7C3-62C0-1F6E20DA9735",
+        "F9704804-F732-0D44-492D-1FB5C814EAAA",
+        "ECC6F7B4-6D02-EED8-AA71-E7DD9186E289",
+        "4E04EBB6-3BEA-5965-3BC0-8F5943C63233",
+        "29A93CAE-6906-4A29-D9CA-55829264D9E1",
+        "62762857-8ADB-570A-F186-DDF000E36324",
+        "957CFDC0-59BF-DE12-037E-38DB46A74886",
+        "78093F3E-092C-F3B5-D712-CE43CF1A1A84",
+        "BF396AE3-0A5C-A711-D1CB-A02876B3F7A6",
+        "34D95ADE-E8CA-6D53-F8BA-00EE0EBAB245"
+      ]
+    },
+    {
+      "entity": "RFC:TOC090317WA0",
+      "signal": "purchase_without_po",
+      "why_innocent": "Compra unica de monto menor, por debajo del umbral que exige orden de compra formal; existe factura y registro contable completos.",
+      "invoices": [
+        "E770AB88-6304-CF45-08F2-752645AB09F0"
+      ]
+    },
+    {
+      "entity": "RFC:SZQ020502JSH",
+      "signal": "identical_round_amounts",
+      "why_innocent": "Iguala mensual fija amparada por contrato vigente; el monto identico cada mes es la cuota pactada, no una senal de fraccionamiento.",
+      "invoices": [
+        "718B2B90-DE9A-040E-1970-D5A050D641AE",
+        "D1BE04BE-7FB3-527B-EE45-5087B8EB6FFE",
+        "7AFE625E-5798-3D76-2E84-CDE2B2EE0F1B",
+        "FC1DF75B-CE75-97E5-F901-D98DBFC87041",
+        "497206BE-510C-70A5-914E-F299A6E0D8CB",
+        "593B8EBF-D82C-23A6-8865-C91F0222AA97",
+        "6451768E-9A1B-EFEC-F17D-38F0E5D368C8",
+        "5A4879BF-C7C5-BE83-CB3A-C18276E88B31"
+      ]
+    },
+    {
+      "entity": "RFC:PZO020815270",
+      "signal": "employee_vendor_bank_linkage",
+      "why_innocent": "Comparte institucion bancaria con EMP:0014 pero no cuenta; no existe transferencia entre el proveedor y el empleado, y el gasto esta amparado por contrato.",
+      "invoices": [
+        "90B8EFF0-D9F7-A949-24E9-006445621663",
+        "5154FB1E-00E8-6DA3-CA39-79BE1608B9B6",
+        "02CAFA30-EEEC-77D5-F870-74C04F097746",
+        "C6E1BC8C-DBAF-9156-4DAD-1DDBFEFB9C1F"
+      ]
+    },
+    {
+      "entity": "RFC:FRL130510G1A",
+      "signal": "generic_service_concept",
+      "why_innocent": "Concepto generico en la factura, pero respaldado por un contrato de consultoria fiscal vigente desde hace mas de tres anos con entregables trimestrales documentados.",
+      "invoices": [
+        "711ADAC1-5D49-90CB-6AB4-1C087ED8EAE4",
+        "1EFEE481-6794-EB08-5FB2-9D8EECFDDBDB",
+        "A6456B5A-8148-12C6-DF5A-8941B47BBD47",
+        "83A9FC69-81FD-8B73-8362-9FF8E624101E",
+        "D42214AD-6EE8-7107-3338-CCAF1B14F314",
+        "9987223A-1EA7-5F82-39A6-8C01B6CD890E"
+      ]
+    },
+    {
+      "entity": "RFC:SAT130122D2K",
+      "signal": "new_vendor_spend_concentration",
+      "why_innocent": "Contrato marco firmado con entregables por fase; cada factura tiene una orden de compra correspondiente que documenta la fase.",
+      "invoices": [
+        "0113A8F6-1F06-612D-2EDE-06739446B0F3",
+        "DB238699-8178-0E5E-2FA6-090FED70A161",
+        "408D29F0-AF06-A37A-779E-65A8B5B6CDBA",
+        "46560834-F7E8-5F96-3DBC-875359326DA2",
+        "DF17CC94-7B50-6595-6C75-BACEF59622C0",
+        "C8280E87-9896-773D-D405-D33C2B838F8B",
+        "373655F0-4123-EF0C-8A1A-3373C8F278C5",
+        "8DECB842-9873-6DC1-0889-C5CCA49B1B67",
+        "8B3CAF86-04E2-F6C2-1466-4C10A32AAFE9"
+      ]
+    },
+    {
+      "entity": "RFC:AVA0304148N7",
+      "signal": "efos_list_match",
+      "why_innocent": "La publicacion en el listado 69-B es posterior a todas las operaciones con este proveedor; no podia conocerse al contratar, y existe contrato con materialidad documentada.",
+      "invoices": [
+        "27E10960-6254-2D5E-6CC0-93C6FD286B2C",
+        "B9CB54AE-9BE7-49F4-ED14-694EFB3E9456",
+        "67471EC6-40F9-598C-3EDB-4C6C878B866B",
+        "A7C8D7B5-8F0B-B40C-21B7-9A1B15E571F8",
+        "514AEE0F-6CEA-BDC7-425C-7903F401EDCC"
+      ]
+    },
+    {
+      "entity": "RFC:UQU160617DGF",
+      "signal": "cash_channel_payments",
+      "why_innocent": "Pagos en efectivo de bajo monto a un proveedor con anos de historial; cada uno tiene CFDI y registro contable correspondiente.",
+      "invoices": [
+        "20DB2723-06BF-96CA-888D-8C9DBAD46464",
+        "6CE141AE-7EF4-CAC3-EEBF-D4614D1D2410",
+        "C30D0A30-E6F7-5057-A597-C8168641F1C0",
+        "058633A1-170A-7FA1-804B-2FB5B9C0D9C1",
+        "97D76C05-9612-308A-E7A1-23FA97F3D956",
+        "4F0CB48A-03F8-D669-7AA8-4273FFB99C18",
+        "24DACD94-6359-2DEC-F48F-1BE413AEC862",
+        "6FE056DA-F3CA-CC94-CEDD-BF88371A233F"
+      ]
+    },
+    {
+      "entity": "RFC:NGQ100716249",
+      "signal": "same_requester_approver",
+      "why_innocent": "El mismo puesto solicita y aprueba por politica interna documentada para compras menores de herramienta; el monto por orden esta muy por debajo de cualquier umbral de aprobacion y hay contrato vigente.",
+      "invoices": [
+        "08E5121C-E0A7-2707-6294-0BAA7C6E194F",
+        "ED205992-924E-C3FD-304F-958B20EF0125",
+        "5EE4471F-D16A-9B24-49AA-A90BABA258FF",
+        "610374A2-F97C-CAE9-95D8-FFDD5807C687",
+        "30A7FBFD-45E5-D9C0-8853-3380FEEE8958",
+        "34ABA974-B196-1B78-E455-D9AF59685406"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+modelo,accuracy,precision,recall,f1,roc_auc
+CART_podado,1.0,1.0,1.0,1.0,1.0
+Bagging_RandomForest,1.0,1.0,1.0,1.0,1.0
+Boosting_GradientBoosting,1.0,1.0,1.0,1.0,1.0

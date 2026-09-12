@@ -1,0 +1,9 @@
+node_id,feature,threshold,n_samples_node,fraud_rate_left,fraud_rate_right,odds_ratio_left_vs_right
+0,dias_antiguedad_al_facturar,797.5,744,0.8436,0.0098,545.9474
+1,pct_facturas_ppd,0.0834,237,0.9476,0.0,18088217.2059
+2,tiene_contrato,0.5,157,0.9984,0.0,614999385.0
+3,monto_total_facturado,224300.0078,124,0.0,1.0,0.0
+6,monto_promedio_factura,52063.375,33,0.0,0.0,1.0
+9,cat_Logistica,0.5,80,0.0,0.0,1.0
+12,monto_total_facturado,2742135.5938,507,0.0,1.0,0.0
+13,num_formas_pago_distintas,1.5,506,0.0,0.0,1.0
