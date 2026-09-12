@@ -1,0 +1,26 @@
+{
+  "seed": 43,
+  "findings": [],
+  "leads_not_pursued": [
+    {
+      "entity": "RFC:DDDD040404DD4",
+      "signal": "structuring_candidate",
+      "reason": "Cinco pagos consecutivos justo debajo del umbral de 100,000, pero cada uno corresponde a una PO distinta con requester y aprobador distintos. El challenger no pudo mostrar concentración temporal ni beneficiario común. Cerrado sin acusación.",
+      "tool_calls_made": ["get_pos_by_vendor", "check_split_pattern", "get_approvers"],
+      "closed_by": "challenger"
+    },
+    {
+      "entity": "RFC:EEEE050505EE5",
+      "signal": "cfdi_sin_pago",
+      "reason": "Factura vigente en invoices sin liquidación registrada en bank_txns, pero la fecha de emisión cae fuera del rango del estate; el pago pudo ocurrir después del corte. Sin evidencia de que la falta de pago sea el patrón, no una asimetría de horizonte.",
+      "tool_calls_made": ["get_invoices_by_vendor", "get_bank_by_invoice", "check_settlement_window"],
+      "closed_by": "validator"
+    }
+  ],
+  "run_metadata": {
+    "llm_calls": 12,
+    "mxn_cost": 1.05,
+    "wall_clock_seconds": 18.4,
+    "deterministic": true
+  }
+}

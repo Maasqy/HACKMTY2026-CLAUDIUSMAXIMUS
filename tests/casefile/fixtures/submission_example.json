@@ -1,0 +1,64 @@
+{
+  "seed": 42,
+  "findings": [
+    {
+      "scheme_type": "kickback",
+      "entities": ["RFC:AAAA010101AA1", "EMP:0007"],
+      "narrative": "Proveedor Alpha factura consultoría por 1.2 millones a la empresa auditada. El pago sale por SPEI a la CLABE del proveedor; ese mismo día el proveedor transfiere 288 mil pesos (24%) a la CLABE personal del gerente de compras EMP:0007, quien aprobó tanto la orden como el contrato. La misma secuencia se repite tres veces en cinco meses.",
+      "rule_broken": "Código de Ética · conflicto de interés no revelado y beneficio económico del aprobador",
+      "peso_amount": 1200000.00,
+      "confidence": "proven",
+      "money_trail": [
+        {"from": "RFC:GRUP870101ABC", "to": "RFC:AAAA010101AA1", "amount": 1200000.00, "date": "2026-02-15", "exhibit_id": "E1"},
+        {"from": "RFC:AAAA010101AA1", "to": "EMP:0007", "amount": 288000.00, "date": "2026-02-15", "exhibit_id": "E3"}
+      ],
+      "exhibits": [
+        {"exhibit_id": "E1", "source_table": "invoices", "record_id": "INV-00042", "note": "Factura por 1,200,000 MXN emitida por Alpha a la empresa."},
+        {"exhibit_id": "E2", "source_table": "bank_txns", "record_id": "BNK-00099", "note": "SPEI por 1,200,000 MXN de la empresa a la CLABE de Alpha."},
+        {"exhibit_id": "E3", "source_table": "bank_txns", "record_id": "BNK-00100", "note": "SPEI mismo día por 288,000 MXN de Alpha a la CLABE personal de EMP:0007."},
+        {"exhibit_id": "E4", "source_table": "purchase_orders", "record_id": "PO-00042", "note": "Orden de compra aprobada por EMP:0007, quien recibió el retorno."}
+      ],
+      "adversarial_review": {
+        "challenged": "El 24% podría ser una comisión legítima por intermediación, no un kickback.",
+        "survived_because": "El aprobador de la PO es la misma persona que recibe el pago del proveedor; no hay contrato de intermediación registrado y la CLABE receptora está en la tabla employees.",
+        "reviewer": "challenger"
+      }
+    },
+    {
+      "scheme_type": "revenue_inflation",
+      "entities": ["RFC:GRUP870101ABC", "RFC:CLIE990909XYZ"],
+      "narrative": "La empresa auditada emite facturas a un cliente por 850 mil pesos en el último trimestre del periodo. Ninguna de esas facturas tiene liquidación en bank_txns dentro del horizonte del estate; el ledger las registra como ingreso realizado. El patrón infla ingresos sin cobro efectivo.",
+      "rule_broken": "NIF A-2 · reconocimiento de ingresos únicamente cuando existe probabilidad razonable de cobro",
+      "peso_amount": 850000.00,
+      "confidence": "probable",
+      "exhibits": [
+        {"exhibit_id": "F1", "source_table": "invoices", "record_id": "INV-00301", "note": "Factura a cliente por 350,000 MXN, sin pago asociado."},
+        {"exhibit_id": "F2", "source_table": "invoices", "record_id": "INV-00302", "note": "Factura a cliente por 500,000 MXN, sin pago asociado."},
+        {"exhibit_id": "F3", "source_table": "ledger", "record_id": "LDG-04412", "note": "Ingreso reconocido en cuenta 4000 por 850,000 MXN correspondiente a ambas facturas."}
+      ]
+    }
+  ],
+  "leads_not_pursued": [
+    {
+      "entity": "RFC:BBBB020202BB2",
+      "signal": "efos_list_match",
+      "reason": "Aparece en 69-B en estatus presunto con fecha 2026-03-01, pero la última operación con este proveedor en invoices es 2025-11-15, cuatro meses antes de la publicación. No hay operación posterior al estatus, así que la presunción no se aplica retroactivamente.",
+      "tool_calls_made": ["get_invoices_by_vendor", "get_efos_status", "get_ledger_by_invoice"],
+      "closed_by": "investigator"
+    },
+    {
+      "entity": "RFC:CCCC030303CC3",
+      "signal": "concentracion_gasto",
+      "reason": "Proveedor nuevo con 65% del gasto de mantenimiento en Q2, pero el contrato marco CTR-00007 explica el pico y las órdenes de compra tienen aprobadores distintos por monto. El challenger propuso structuring; los importes están sobre el umbral, no debajo.",
+      "tool_calls_made": ["get_contracts_by_vendor", "get_pos_by_vendor", "check_split_pattern"],
+      "closed_by": "challenger"
+    }
+  ],
+  "run_metadata": {
+    "llm_calls": 24,
+    "mxn_cost": 3.42,
+    "wall_clock_seconds": 42.71,
+    "deterministic": true,
+    "cost_by_role": {"triage": 0.11, "investigator": 2.05, "challenger": 0.94, "synthesizer": 0.32}
+  }
+}
