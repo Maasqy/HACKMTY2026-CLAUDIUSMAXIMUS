@@ -13,10 +13,10 @@ Procede asi:
 1. Carga el patrimonio y reporta que tablas encontraste y cuantas filas. Si falta alguna,
    detente y dilo.
 2. Corre los detectores deterministas. Reporta los leads ordenados por score, con su razon.
-3. Delega en el subagente `ledger-investigator` el lead mas prometedor. Deja que declare
+3. Delega en el subagente `investigator` el lead mas prometedor. Deja que declare
    hipotesis, que la confirmaria y que la mataria.
 4. Usa `money-tracer` cuando haya que seguir un monto.
-5. Antes de elevar cualquier hallazgo, invoca a `evidence-gatekeeper`. Si degrada o
+5. Antes de elevar cualquier hallazgo, invoca a `challenger`. Si degrada o
    rechaza, registra la razon y sigue.
 6. Repite hasta agotar leads con score relevante o hasta el limite de pasos.
 7. Delega en `case-writer` la redaccion del expediente.

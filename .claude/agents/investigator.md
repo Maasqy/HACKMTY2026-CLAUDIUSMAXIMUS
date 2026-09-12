@@ -25,11 +25,11 @@ Si no puedes escribir la tercera, tu hipotesis no es falsable y no sirve. Reform
 - Despues de dos consultas que no mueven la hipotesis, la abandonas. Escribes por que y
   pasas al siguiente lead. Un investigador terco es un mal investigador.
 - Nunca acusas. Tu produces hallazgos candidatos. La acusacion la aprueba el
-  evidence-gatekeeper y el gate determinista.
+  challenger y el gate determinista.
 - Cuando un lead se descarta, el registro de por que se descarto es entregable, no basura.
 
 ## Salida
 
-Cada paso produce un objeto InvestigationStep segun docs/00-setup/08-CONTRATO-DATOS.md.
+Cada paso produce un objeto InvestigationStep segun docs/spec/submission_schema.json.
 Escribes en lenguaje de auditor, no de sistema: alguien de finanzas debe poder leer tu
 bitacora corrida y entender que hiciste.
