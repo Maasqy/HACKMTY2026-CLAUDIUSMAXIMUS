@@ -59,6 +59,57 @@ else
   malo "el pipeline determinista fallo"
 fi
 
+echo "== 5a. el investigador nunca manda 'tools' a Ollama"
+# Regresion real, con el modelo real: gemma3 (el que este proyecto usa) no
+# esta en la lista corta de modelos a los que Ollama les soporta 'tools'
+# nativo. Mandarselo de todos modos no degrada nada: 400 en CADA llamada,
+# "does not support tools", cero findings, sin decir por que (hasta que
+# tambien se arreglo client.py para mostrar el cuerpo del error). El fix fue
+# describir las herramientas en el prompt y pedir el llamado como JSON
+# plano — un servidor falso aqui comprueba que ESE payload nunca vuelve a
+# llevar la llave 'tools', sin necesitar Ollama real para probarlo.
+python3 - <<'PY' >/tmp/_nottools.log 2>&1
+import json, sys, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+sys.path.insert(0, ".")
+
+visto_tools = {"si": False}
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if "tools" in body:
+            visto_tools["si"] = True
+        out = {"es_fraude": False, "reason_if_not": "prueba"}
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"message": {"role": "assistant",
+                         "content": json.dumps(out)}}).encode())
+
+srv = HTTPServer(("127.0.0.1", 0), H)
+port = srv.server_address[1]
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+from src.forensic.client import LLMClient
+from src.forensic.investigator import investigar_lead
+from src.scoring import generar_leads
+from src.tools import EstateDB
+
+with EstateDB("data/estates/estate_0001.db") as estate:
+    leads = generar_leads(estate)
+    client = LLMClient(base_url=f"http://127.0.0.1:{port}")
+    investigar_lead(estate, leads[0], client)
+
+srv.shutdown()
+sys.exit(1 if visto_tools["si"] else 0)
+PY
+if [ $? = 0 ]; then
+  ok "el investigador no manda 'tools' (funciona en gemma3 y en cualquier modelo)"
+else
+  malo "el investigador volvio a mandar 'tools' — revienta en gemma3 (ver /tmp/_nottools.log)"
+fi
+
 echo "== 5b. reconciliacion de pesos: por tabla, no sumada entre tablas"
 # Regresion real: el validador interno sumaba invoices + bank_txns como si
 # fueran pesos distintos, cuando una factura y la transferencia que la pago

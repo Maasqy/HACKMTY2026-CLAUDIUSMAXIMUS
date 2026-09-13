@@ -137,13 +137,28 @@ class LLMClient:
 
     # -- public --------------------------------------------------------
 
-    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None) -> dict:
+    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None,
+            format: Optional[str] = None) -> dict:
         """One turn. Returns the raw message dict from the model, which may
         carry `content`, `tool_calls`, or both.
 
         Deterministic by construction: temperature 0 and a fixed seed, so
         the same messages produce the same reply and therefore the same
         cache key on the next run.
+
+        `tools` uses Ollama's native tool-calling API — which only a small,
+        hardcoded subset of models actually support. Passing it to a model
+        outside that list (gemma3, notably) does not degrade gracefully: it
+        400s on every call with "does not support tools", which is the
+        actual failure mode this project hit. The investigator (etapa 3)
+        does not use this parameter for that reason — see
+        src/forensic/prompts.py for the model-agnostic alternative (tools
+        described in the prompt, calls requested as plain JSON).
+
+        `format="json"` asks Ollama to constrain sampling to syntactically
+        valid JSON. Unlike `tools`, this works on every model — it is a
+        decoding constraint, not a per-model feature — so it is the
+        mechanism actually used here to make replies parseable.
         """
         payload: dict[str, Any] = {
             "model": self.model,
@@ -153,6 +168,8 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = tools
+        if format:
+            payload["format"] = format
 
         key = self._cache_key(payload)
         cached = self._cache_path(key)

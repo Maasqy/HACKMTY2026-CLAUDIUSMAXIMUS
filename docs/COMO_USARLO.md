@@ -253,3 +253,20 @@ del que uno creia haber instalado, sin ningun error a la vista.
 
 Cambiar de modelo cambia los hallazgos, asi que el tag queda registrado en
 la corrida.
+
+### Por que el investigador no usa el `tools` nativo de Ollama
+
+Si cambias a otro modelo y de repente vuelves a ver `findings=0` con la
+razon `"does not support tools"` en `leads_not_pursued`, es esto: Ollama
+solo soporta su API de tool-calling nativa en una lista corta de modelos
+(llama3.1, qwen2.5, un puñado mas). Mandarle `tools` a uno fuera de esa
+lista no degrada nada — **400 en cada llamada**, sin excepcion.
+
+Por eso el investigador (etapa 3) no usa `tools=`: describe las
+herramientas en el prompt y le pide al modelo que las llame respondiendo
+con un JSON plano (`{"tool": "...", "arguments": {...}}`), el mismo truco
+que se usaba antes de que existiera function-calling nativo. Funciona con
+cualquier modelo de chat, gemma3 incluido. El detalle esta en
+`src/forensic/prompts.py` y `src/forensic/investigator.py`; el paso 5a de
+`verificar_todo.sh` comprueba, con un servidor falso, que la llave `tools`
+nunca vuelve a viajar en el request.
