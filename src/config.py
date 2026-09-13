@@ -56,6 +56,10 @@ ROUNDTRIP_MIN_RETURN_PCT = 0.01
 # revenue_inflation: facturas emitidas por la empresa sin cobro.
 REVENUE_SETTLE_DAYS = 90
 PERIOD_END_DAYS = 10
+# Minimo de facturas al cierre por cliente para llamar el patron sistematico
+# y no un caso aislado. El generator emite 3 a 5 facturas fraudulentas por
+# cliente concentradas en los ultimos dias del mes.
+REVENUE_INFL_MIN_INVOICES = 3
 
 # Estados reales del listado 69-B publicado por el SAT.
 # 'definitivo'         -> acusable (efecto retroactivo por 69-B CFF)

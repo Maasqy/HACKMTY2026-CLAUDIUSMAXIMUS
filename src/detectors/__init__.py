@@ -11,13 +11,17 @@ from src.detectors import (
     efos_match,
     kickback,
     payment_wo_inv,
+    revenue_inflation,
     round_tripping,
     threshold_splitting,
 )
 from src.forensic.company import CompanyIdentity
 from src.tools.estate_access import EstateDB
 
-_REGISTRY = [efos_match, kickback, payment_wo_inv, round_tripping, threshold_splitting]
+_REGISTRY = [
+    efos_match, kickback, payment_wo_inv, revenue_inflation,
+    round_tripping, threshold_splitting,
+]
 
 
 def run_all(db: EstateDB, company: CompanyIdentity) -> list[Lead]:

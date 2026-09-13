@@ -14,6 +14,7 @@ from src.detectors import (
     efos_match,
     kickback,
     payment_wo_inv,
+    revenue_inflation,
     round_tripping,
     threshold_splitting,
     run_all,
@@ -663,6 +664,169 @@ def test_round_tripping_unresolvable_intermediate_stays_lead() -> None:
         leads = round_tripping.find_leads(db, _company())
     assert not any(dict(l.detector_context).get("primary_clabe") == "000000000000009999"
                    for l in leads)
+
+
+def test_revenue_inflation_positive_promotes_to_finding() -> None:
+    """3 facturas issuer=empresa al cierre de mes, sin cobros correlacionados,
+    con asientos ledger de reconocimiento. Debe promover a finding."""
+    with _estate() as db:
+        conn = db._conn
+        # Cliente externo (no vendor, no empleado, no la empresa).
+        invoices = [
+            ("INV-RI-01", COMPANY_RFC, "CLI220301AA1", "2026-08-28", 0, 0, 150000.00,
+             "Venta servicios fin de periodo", "G03", "03", "PPD", "vigente"),
+            ("INV-RI-02", COMPANY_RFC, "CLI220301AA1", "2026-08-30", 0, 0, 220000.00,
+             "Venta servicios fin de periodo", "G03", "03", "PPD", "vigente"),
+            ("INV-RI-03", COMPANY_RFC, "CLI220301AA1", "2026-08-31", 0, 0, 180000.00,
+             "Venta servicios fin de periodo", "G03", "03", "PUE", "vigente"),
+        ]
+        conn.executemany(
+            """INSERT INTO invoices
+            (uuid, issuer_rfc, receiver_rfc, issue_date, subtotal, iva, total,
+             concepto_text, uso_cfdi, forma_pago, metodo_pago, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            invoices,
+        )
+        conn.executemany(
+            """INSERT INTO ledger
+            (date, account_code, account_name, debit, credit, description,
+             invoice_uuid, cost_center, approver)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            [
+                ("2026-08-28", "1100", "Clientes", 150000.00, 0.00, "CxC", "INV-RI-01", "CC1", "a"),
+                ("2026-08-28", "4000", "Ingresos", 0.00, 150000.00, "Ingreso", "INV-RI-01", "CC1", "a"),
+                ("2026-08-30", "1100", "Clientes", 220000.00, 0.00, "CxC", "INV-RI-02", "CC1", "a"),
+                ("2026-08-30", "4000", "Ingresos", 0.00, 220000.00, "Ingreso", "INV-RI-02", "CC1", "a"),
+                ("2026-08-31", "1100", "Clientes", 180000.00, 0.00, "CxC", "INV-RI-03", "CC1", "a"),
+                ("2026-08-31", "4000", "Ingresos", 0.00, 180000.00, "Ingreso", "INV-RI-03", "CC1", "a"),
+            ],
+        )
+        conn.commit()
+        leads = revenue_inflation.find_leads(db, _company())
+        entity = "RFC:CLI220301AA1"
+        assert entity in [l.entity for l in leads], f"leads: {[l.entity for l in leads]}"
+        lead = next(l for l in leads if l.entity == entity)
+        assert dict(lead.detector_context)["num_invoices"] == "3"
+        assert dict(lead.detector_context)["cliente_nuevo"] == "true"
+        result = promote(lead, db, _company())
+    assert result.candidate is not None, result.reason
+    cand = result.candidate
+    assert cand["scheme_type"] == "revenue_inflation"
+    assert cand["peso_amount"] == 550000.00
+    assert "NIF A-2" in cand["rule_broken"]
+    # Validador contra el mismo estate reconstruido.
+    with _estate() as db2:
+        conn = db2._conn
+        conn.executemany(
+            """INSERT INTO invoices
+            (uuid, issuer_rfc, receiver_rfc, issue_date, subtotal, iva, total,
+             concepto_text, uso_cfdi, forma_pago, metodo_pago, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [
+                ("INV-RI-01", COMPANY_RFC, "CLI220301AA1", "2026-08-28", 0, 0, 150000.00,
+                 "Venta servicios fin de periodo", "G03", "03", "PPD", "vigente"),
+                ("INV-RI-02", COMPANY_RFC, "CLI220301AA1", "2026-08-30", 0, 0, 220000.00,
+                 "Venta servicios fin de periodo", "G03", "03", "PPD", "vigente"),
+                ("INV-RI-03", COMPANY_RFC, "CLI220301AA1", "2026-08-31", 0, 0, 180000.00,
+                 "Venta servicios fin de periodo", "G03", "03", "PUE", "vigente"),
+            ],
+        )
+        conn.executemany(
+            """INSERT INTO ledger
+            (date, account_code, account_name, debit, credit, description,
+             invoice_uuid, cost_center, approver)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            [
+                ("2026-08-28", "1100", "Clientes", 150000.00, 0.00, "CxC", "INV-RI-01", "CC1", "a"),
+                ("2026-08-28", "4000", "Ingresos", 0.00, 150000.00, "Ingreso", "INV-RI-01", "CC1", "a"),
+                ("2026-08-30", "1100", "Clientes", 220000.00, 0.00, "CxC", "INV-RI-02", "CC1", "a"),
+                ("2026-08-30", "4000", "Ingresos", 0.00, 220000.00, "Ingreso", "INV-RI-02", "CC1", "a"),
+                ("2026-08-31", "1100", "Clientes", 180000.00, 0.00, "CxC", "INV-RI-03", "CC1", "a"),
+                ("2026-08-31", "4000", "Ingresos", 0.00, 180000.00, "Ingreso", "INV-RI-03", "CC1", "a"),
+            ],
+        )
+        conn.commit()
+        v = validate(cand, db2)
+    assert v.aprobado, v.motivo
+
+
+def test_revenue_inflation_negative_when_paid() -> None:
+    """Facturas con bank_txn 'Cobro factura {UUID8}' no disparan."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO invoices
+            (uuid, issuer_rfc, receiver_rfc, issue_date, subtotal, iva, total,
+             concepto_text, uso_cfdi, forma_pago, metodo_pago, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [
+                ("ABC12345-INV-RI-P1", COMPANY_RFC, "CLI330404BB2", "2026-08-28",
+                 0, 0, 100000.00, "svc", "G03", "03", "PPD", "vigente"),
+                ("ABC22345-INV-RI-P2", COMPANY_RFC, "CLI330404BB2", "2026-08-29",
+                 0, 0, 120000.00, "svc", "G03", "03", "PPD", "vigente"),
+                ("ABC32345-INV-RI-P3", COMPANY_RFC, "CLI330404BB2", "2026-08-30",
+                 0, 0, 140000.00, "svc", "G03", "03", "PPD", "vigente"),
+            ],
+        )
+        # Con cobro correlacionado por el prefijo UUID8.
+        conn.execute(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES ('BNK-CBR-1','2026-09-05','CLICLABE_XXXXXXXXX',?,100000.00,'Cobro factura ABC12345','SPEI')",
+            (COMPANY_CLABE,),
+        )
+        conn.execute(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES ('BNK-CBR-2','2026-09-06','CLICLABE_XXXXXXXXX',?,120000.00,'Cobro factura ABC22345','SPEI')",
+            (COMPANY_CLABE,),
+        )
+        conn.commit()
+        leads = revenue_inflation.find_leads(db, _company())
+    # Al menos una cobrada -> no dispara para este cliente.
+    assert not any(l.entity == "RFC:CLI330404BB2" for l in leads)
+
+
+def test_revenue_inflation_negative_below_min_invoices() -> None:
+    """Solo 2 facturas al cierre no dispara aunque no haya cobros."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO invoices
+            (uuid, issuer_rfc, receiver_rfc, issue_date, subtotal, iva, total,
+             concepto_text, uso_cfdi, forma_pago, metodo_pago, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [
+                ("INV-DOS-01", COMPANY_RFC, "CLI440505CC3", "2026-08-30",
+                 0, 0, 200000.00, "svc", "G03", "03", "PPD", "vigente"),
+                ("INV-DOS-02", COMPANY_RFC, "CLI440505CC3", "2026-08-31",
+                 0, 0, 250000.00, "svc", "G03", "03", "PPD", "vigente"),
+            ],
+        )
+        conn.commit()
+        leads = revenue_inflation.find_leads(db, _company())
+    assert not any(l.entity == "RFC:CLI440505CC3" for l in leads)
+
+
+def test_revenue_inflation_negative_not_at_period_end() -> None:
+    """Facturas al inicio del mes no disparan aunque no haya cobros."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO invoices
+            (uuid, issuer_rfc, receiver_rfc, issue_date, subtotal, iva, total,
+             concepto_text, uso_cfdi, forma_pago, metodo_pago, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [
+                ("INV-INI-01", COMPANY_RFC, "CLI550606DD4", "2026-08-05",
+                 0, 0, 200000.00, "svc", "G03", "03", "PPD", "vigente"),
+                ("INV-INI-02", COMPANY_RFC, "CLI550606DD4", "2026-08-10",
+                 0, 0, 250000.00, "svc", "G03", "03", "PPD", "vigente"),
+                ("INV-INI-03", COMPANY_RFC, "CLI550606DD4", "2026-08-15",
+                 0, 0, 300000.00, "svc", "G03", "03", "PPD", "vigente"),
+            ],
+        )
+        conn.commit()
+        leads = revenue_inflation.find_leads(db, _company())
+    assert not any(l.entity == "RFC:CLI550606DD4" for l in leads)
 
 
 def test_run_all_orders_leads_stably() -> None:

@@ -31,7 +31,9 @@ from src.config import (
     EFOS_PRESUNTO,
     GENERIC_CONCEPT_PATTERNS,
     KICKBACK_WINDOW_DAYS,
+    PERIOD_END_DAYS,
     PESO_TOLERANCE,
+    REVENUE_INFL_MIN_INVOICES,
     ROUNDTRIP_WINDOW_DAYS,
     VENDOR_FRESHNESS_DAYS,
 )
@@ -50,6 +52,7 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
     router = {
         "efos_match": _promote_efos_match,
         "kickback": _promote_kickback,
+        "revenue_inflation": _promote_revenue_inflation,
         "round_tripping": _promote_round_tripping,
         # threshold_splitting existe como promoter (ver
         # _promote_threshold_splitting), pero sobre el sweep 1-50 subia falsas
@@ -360,6 +363,114 @@ def _promote_kickback(
         "exhibits": exhibits,
         "money_trail": steps,
         "confidence": "proven",
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_revenue_inflation(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    client_rfc = ctx.get("client_rfc", "")
+    num_invoices = int(ctx.get("num_invoices", "0") or 0)
+    cliente_nuevo = ctx.get("cliente_nuevo") == "true"
+
+    if num_invoices < REVENUE_INFL_MIN_INVOICES:
+        return PromotionResult(
+            None,
+            f"solo {num_invoices} facturas al cliente; el patron sistematico "
+            f"requiere >={REVENUE_INFL_MIN_INVOICES}.",
+        )
+
+    invoice_uuids = [rid for tbl, rid in lead.suggested_records if tbl == "invoices"]
+    ledger_ids = [rid for tbl, rid in lead.suggested_records if tbl == "ledger"]
+    facturas = [f for f in (db.obtener_factura(u) for u in invoice_uuids) if f is not None]
+    if len(facturas) < REVENUE_INFL_MIN_INVOICES:
+        return PromotionResult(None, "no se pudieron cargar todas las invoices citadas.")
+
+    # Ledger recargado por invoice_uuid para narrativa contable.
+    ledger_debit = 0.0
+    ledger_credit = 0.0
+    ledger_by_id: dict[int, object] = {}
+    for f in facturas:
+        for e in db.obtener_asientos_contables(invoice_uuid=f.uuid):
+            if e.account_code in {"1100", "4000"}:
+                ledger_by_id[e.entry_id] = e
+                ledger_debit += e.debit
+                ledger_credit += e.credit
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    for f in sorted(facturas, key=lambda x: (x.issue_date, x.uuid)):
+        _add(
+            "invoices", f.uuid,
+            f"Factura {f.uuid[:8]} emitida por la empresa a {client_rfc} el "
+            f"{f.issue_date} por ${f.total:,.2f} MXN (metodo {f.metodo_pago}, "
+            f"status {f.status}).",
+        )
+    for eid_num in sorted(ledger_by_id.keys()):
+        e = ledger_by_id[eid_num]
+        _add(
+            "ledger", str(e.entry_id),
+            f"Asiento {e.entry_id} el {e.date}: cuenta {e.account_code} "
+            f"({e.account_name}) debit ${e.debit:,.2f} / credit ${e.credit:,.2f} "
+            f"contra factura {(e.invoice_uuid or '')[:8]}.",
+        )
+
+    total = round(sum(f.total for f in facturas), 2)
+    first_date = min(f.issue_date for f in facturas)
+    last_date = max(f.issue_date for f in facturas)
+
+    # Money trail: un step virtual empresa -> cliente reconociendo el ingreso
+    # sin cobro. Exhibit_id apunta a la primera factura.
+    first_inv_uuid = sorted(facturas, key=lambda x: (x.issue_date, x.uuid))[0].uuid
+    steps = [{
+        "from": f"RFC:{company.rfc}",
+        "to": f"RFC:{client_rfc}",
+        "amount": total,
+        "date": last_date,
+        "exhibit_id": exhibit_id_by_record[("invoices", first_inv_uuid)],
+    }]
+
+    histo_frag = (
+        "ese cliente no tiene ningun cobro previo en el estate"
+        if cliente_nuevo
+        else "el cliente tiene cobros previos por otras facturas pero ninguno correlacionado con este cluster"
+    )
+    narrative = (
+        f"La empresa emitio {len(facturas)} facturas al cliente {client_rfc} "
+        f"entre {first_date} y {last_date} por un total de ${total:,.2f} MXN, "
+        f"todas dentro de los ultimos {PERIOD_END_DAYS} dias del mes. El "
+        f"ledger registra los ingresos (debit CxC 1100 ${ledger_debit:,.2f}, "
+        f"credit Ingresos 4000 ${ledger_credit:,.2f}) pero no existe bank_txn "
+        f"entrante correlacionado; {histo_frag}. El patron es reconocimiento "
+        f"de ingreso al cierre sin cobro ni sustancia economica."
+    )
+
+    confidence = "proven" if cliente_nuevo and ledger_by_id else "probable"
+
+    candidate = {
+        "scheme_type": "revenue_inflation",
+        "entities": [f"RFC:{client_rfc}"],
+        "narrative": narrative,
+        "rule_broken": (
+            "NIF A-2 devengacion + CFF art. 69-B: reconocimiento de ingreso al "
+            "cierre del periodo sin sustancia economica ni cobro correlacionado."
+        ),
+        "peso_amount": total,
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": confidence,
     }
     return PromotionResult(candidate, "ok")
 
