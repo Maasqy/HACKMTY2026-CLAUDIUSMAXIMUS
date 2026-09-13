@@ -1,55 +1,232 @@
 {
-  "findings": [],
+  "seed": 42,
+  "findings": [
+    {
+      "scheme_type": "kickback",
+      "entities": [
+        "RFC:SVP200815KL9",
+        "EMP:0007"
+      ],
+      "narrative": "El proveedor Servicios Preferentes de Ponente (RFC:SVP200815KL9) recibio tres pagos de la empresa entre febrero y mayo de 2026 por asesoria estrategica trimestral. Cada vez, entre 3 y 5 dias despues, el proveedor transfirio una parte de ese dinero a la cuenta personal del empleado Ricardo Elizondo Sada (Gerente de Compras), etiquetada 'Reembolso de gastos' -- un concepto que no corresponde a una relacion proveedor-empleado. Ricardo ademas aparece como solicitante Y aprobador de las tres ordenes de compra a este mismo proveedor, sin segregacion de funciones. El patron se repite identico tres veces seguidas, lo que descarta un reembolso aislado.",
+      "rule_broken": "Codigo de conducta interno: conflicto de interes no revelado y ausencia de segregacion de funciones (mismo empleado solicita y aprueba la compra al proveedor del que luego recibe fondos).",
+      "peso_amount": 644443.8,
+      "exhibits": [
+        {
+          "exhibit_id": "EX-01",
+          "source_table": "bank_txns",
+          "record_id": "T-0012",
+          "note": "Pago de la empresa a Servicios Preferentes de Ponente por la factura F-0012."
+        },
+        {
+          "exhibit_id": "EX-02",
+          "source_table": "bank_txns",
+          "record_id": "T-0015",
+          "note": "5 dias despues, el proveedor transfiere a la CLABE personal del empleado Ricardo Elizondo Sada, etiquetado 'Reembolso de gastos'."
+        },
+        {
+          "exhibit_id": "EX-03",
+          "source_table": "bank_txns",
+          "record_id": "T-0013",
+          "note": "Segundo pago de la empresa al mismo proveedor, factura F-0013."
+        },
+        {
+          "exhibit_id": "EX-04",
+          "source_table": "bank_txns",
+          "record_id": "T-0016",
+          "note": "Segunda retransferencia del proveedor al mismo empleado, mismo patron de 5 dias."
+        },
+        {
+          "exhibit_id": "EX-05",
+          "source_table": "bank_txns",
+          "record_id": "T-0014",
+          "note": "Tercer pago de la empresa al proveedor, factura F-0014."
+        },
+        {
+          "exhibit_id": "EX-06",
+          "source_table": "bank_txns",
+          "record_id": "T-0017",
+          "note": "Tercera retransferencia del proveedor al empleado, cierra el patron trimestral."
+        },
+        {
+          "exhibit_id": "EX-07",
+          "source_table": "purchase_orders",
+          "record_id": "PO-0001",
+          "note": "Ricardo Elizondo Sada aparece como solicitante Y aprobador de la orden de compra a este proveedor."
+        },
+        {
+          "exhibit_id": "EX-08",
+          "source_table": "employees",
+          "record_id": "EMP:0007",
+          "note": "Empleado que aprueba las compras a este proveedor y recibe las retransferencias."
+        }
+      ],
+      "money_trail": [
+        {
+          "from": "la empresa",
+          "to": "RFC:SVP200815KL9",
+          "amount": 136880.0,
+          "date": "2026-02-06",
+          "exhibit_id": "EX-01"
+        },
+        {
+          "from": "RFC:SVP200815KL9",
+          "to": "EMP:0007 (Ricardo Elizondo Sada)",
+          "amount": 116348.0,
+          "date": "2026-02-09",
+          "exhibit_id": "EX-02"
+        },
+        {
+          "from": "la empresa",
+          "to": "RFC:SVP200815KL9",
+          "amount": 112984.0,
+          "date": "2026-03-18",
+          "exhibit_id": "EX-03"
+        },
+        {
+          "from": "RFC:SVP200815KL9",
+          "to": "EMP:0007 (Ricardo Elizondo Sada)",
+          "amount": 96036.4,
+          "date": "2026-03-21",
+          "exhibit_id": "EX-04"
+        },
+        {
+          "from": "la empresa",
+          "to": "RFC:SVP200815KL9",
+          "amount": 98484.0,
+          "date": "2026-04-30",
+          "exhibit_id": "EX-05"
+        },
+        {
+          "from": "RFC:SVP200815KL9",
+          "to": "EMP:0007 (Ricardo Elizondo Sada)",
+          "amount": 83711.4,
+          "date": "2026-05-03",
+          "exhibit_id": "EX-06"
+        }
+      ],
+      "confidence": "proven"
+    },
+    {
+      "scheme_type": "phantom_vendor",
+      "entities": [
+        "RFC:AAA120730823"
+      ],
+      "narrative": "Asesores y Administradores Agricolas (RFC:AAA120730823) aparece en el listado 69-B del SAT con status 'definitivo' -- el SAT confirmo que sus operaciones son simuladas. Pese a eso, la empresa le pago tres facturas por un total de $318,652.00 MXN entre enero y abril de 2026, todas con conceptos genericos ('servicios profesionales diversos', 'consultoria general') y sin una sola orden de compra ni contrato que respalde de que se trataba el servicio. No existe ninguna evidencia documental de que el trabajo facturado se haya realizado.",
+      "rule_broken": "Art. 69-B del Codigo Fiscal de la Federacion: operaciones con un contribuyente confirmado por el SAT como emisor de comprobantes que simulan operaciones inexistentes (EFOS 'definitivo').",
+      "peso_amount": 318652.0,
+      "exhibits": [
+        {
+          "exhibit_id": "EX-01",
+          "source_table": "efos_list",
+          "record_id": "AAA120730823",
+          "note": "RFC en el listado 69-B del SAT con status 'definitivo': operaciones simuladas confirmadas por el gobierno, publicado 2017-01-19."
+        },
+        {
+          "exhibit_id": "EX-02",
+          "source_table": "invoices",
+          "record_id": "F-0009",
+          "note": "Factura con concepto generico 'Servicios profesionales diversos', sin detalle de que se compro."
+        },
+        {
+          "exhibit_id": "EX-03",
+          "source_table": "invoices",
+          "record_id": "F-0010",
+          "note": "Segunda factura, mismo patron de concepto generico."
+        },
+        {
+          "exhibit_id": "EX-04",
+          "source_table": "invoices",
+          "record_id": "F-0011",
+          "note": "Tercera factura, mismo patron de concepto generico."
+        },
+        {
+          "exhibit_id": "EX-05",
+          "source_table": "bank_txns",
+          "record_id": "T-0009",
+          "note": "La empresa SI pago esta factura pese a que el emisor esta confirmado como fantasma."
+        },
+        {
+          "exhibit_id": "EX-06",
+          "source_table": "bank_txns",
+          "record_id": "T-0010",
+          "note": "Segundo pago real a un proveedor sin sustancia economica confirmada por el SAT."
+        },
+        {
+          "exhibit_id": "EX-07",
+          "source_table": "bank_txns",
+          "record_id": "T-0011",
+          "note": "Tercer pago real al mismo proveedor fantasma."
+        },
+        {
+          "exhibit_id": "EX-08",
+          "source_table": "vendors",
+          "record_id": "AAA120730823",
+          "note": "Proveedor dado de alta sin una sola orden de compra ni contrato que respalde sus facturas."
+        }
+      ],
+      "money_trail": [
+        {
+          "from": "la empresa",
+          "to": "RFC:AAA120730823",
+          "amount": 111360.0,
+          "date": "2026-02-02",
+          "exhibit_id": "EX-05"
+        },
+        {
+          "from": "la empresa",
+          "to": "RFC:AAA120730823",
+          "amount": 101500.0,
+          "date": "2026-03-04",
+          "exhibit_id": "EX-06"
+        },
+        {
+          "from": "la empresa",
+          "to": "RFC:AAA120730823",
+          "amount": 105792.0,
+          "date": "2026-04-01",
+          "exhibit_id": "EX-07"
+        }
+      ],
+      "confidence": "proven"
+    }
+  ],
   "leads_not_pursued": [
     {
-      "entity": "RFC:AAA121206EV5",
-      "signal": "phantom_vendor",
-      "reason": "El validador rechazo la acusacion: entity 'CRB170512JJ3' no cumple el formato RFC:xxx / EMP:0001; 2 record_id citados no existen en la estate (alucinacion del modelo): purchase_orders/None, contracts/None",
+      "entity": "EMP:0007",
+      "signal": "kickback",
+      "reason": "La transferencia de este empleado ya quedo documentada como parte del mismo hecho investigado bajo RFC:SVP200815KL9 (ver ese finding); no se abre un segundo hallazgo por la misma retransferencia de fondos.",
       "tool_calls_made": [
-        "esta_en_lista_69b",
+        "obtener_transferencias",
+        "resolver_clabe"
+      ],
+      "closed_by": "investigator"
+    },
+    {
+      "entity": "RFC:PAP110603RE5",
+      "signal": "sin_respaldo",
+      "reason": "Dos facturas de papeleria (consumibles de oficina, $9,744 y $10,556 MXN) sin orden de compra ni contrato formal, pero por debajo del umbral de aprobacion y consistentes con la politica de gasto menor de la empresa. Sin conceptos genericos, sin retransferencias, sin listado 69-B. No se encontro evidencia de simulacion.",
+      "tool_calls_made": [
+        "perfil_proveedor",
         "obtener_facturas",
         "obtener_ordenes_compra",
-        "obtener_contratos",
-        "obtener_proveedor"
+        "esta_en_lista_69b"
       ],
-      "closed_by": "validator"
-    },
-    {
-      "entity": "RFC:PMX210430QW2",
-      "signal": "revenue_inflation",
-      "reason": "Fuera del presupuesto de investigacion (score 0.7400, por debajo de los 1 leads priorizados).",
-      "tool_calls_made": [],
-      "closed_by": "validator"
-    },
-    {
-      "entity": "RFC:DAL190815ZZ1",
-      "signal": "revenue_inflation",
-      "reason": "Fuera del presupuesto de investigacion (score 0.3500, por debajo de los 1 leads priorizados).",
-      "tool_calls_made": [],
-      "closed_by": "validator"
+      "closed_by": "investigator"
     }
   ],
   "run_metadata": {
-    "llm_calls": 6,
+    "llm_calls": 0,
     "mxn_cost": 0.0,
-    "wall_clock_seconds": 0.01,
+    "wall_clock_seconds": 0.0,
     "deterministic": true,
-    "etapas_segundos": {
-      "deterministico_cart": 0.0059,
-      "investigador_llm": 0.0037,
-      "validator": 0.0004
-    },
+    "etapas_segundos": {},
     "embudo": {
-      "leads_generados": 3,
-      "leads_investigados": 1,
-      "rechazados_por_validator": 1,
+      "leads_generados": 4,
+      "leads_investigados": 4,
+      "rechazados_por_validator": 0,
       "descartados_por_challenger": 0,
-      "findings_finales": 0
+      "findings_finales": 2
     },
-    "cache_hits": 6,
-    "prompt_tokens": 0,
-    "completion_tokens": 0,
     "cost_by_role": {}
-  },
-  "seed": 0
+  }
 }
