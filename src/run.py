@@ -25,6 +25,7 @@ from src.detectors import run_all as run_detectors
 from src.forensic.company import CompanyDerivationConflict, derive_company
 from src.forensic.promoter import promote
 from src.forensic.validator import validate
+from src.metrics.events import EventEmitter, NullEmitter
 from src.metrics.run_metrics import RunMetrics
 from src.tools.estate_access import EstateDB, EstateNotFoundError
 
@@ -41,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--company-rfc", type=str, default=None,
                     help="RFC de la empresa auditada; si se omite, se deriva del estate.")
+    ap.add_argument("--events", type=Path, default=None,
+                    help="ruta del jsonl de eventos; default out/events_<seed>.jsonl")
+    ap.add_argument("--no-events", action="store_true",
+                    help="no emitir events.jsonl (util para tests o benchmarks)")
     args = ap.parse_args(argv)
 
     if not args.estate.exists():
@@ -55,26 +60,50 @@ def main(argv: list[str] | None = None) -> int:
     findings: list[dict] = []
     leads_not_pursued: list[dict] = []
 
+    if args.no_events:
+        emitter = NullEmitter()
+    else:
+        events_path = args.events or (args.out.parent / f"events_{seed:04d}.jsonl")
+        emitter = EventEmitter(events_path)
+
     try:
-        with EstateDB(args.estate) as db:
+        with EstateDB(args.estate) as db, emitter:
+            emitter.emit("run_started", "", {"seed": seed, "estate": str(args.estate)})
             try:
                 company = derive_company(db, rfc_override=args.company_rfc)
             except CompanyDerivationConflict as e:
                 print(f"[company-derivation] FAIL: {e}", file=sys.stderr)
+                emitter.emit("run_finished", "", {"status": "company_conflict", "error": str(e)})
                 return 3
             print(f"[company-derivation] {company.evidence}", file=sys.stderr)
+            emitter.emit("metrics", "", {"company_rfc": company.rfc, "company_clabe": company.clabe})
 
             leads = run_detectors(db, company)
             for lead in leads:
+                emitter.emit("lead_opened", lead.entity, {
+                    "signal": lead.signal,
+                    "detector": lead.detector_id,
+                    "monto_estimado": lead.monto_estimado,
+                    "reason": lead.reason,
+                })
                 result = promote(lead, db, company)
                 if result.candidate is None:
                     leads_not_pursued.append(_lead_to_dict(lead, result.reason))
+                    emitter.emit("lead_closed", lead.entity, {
+                        "closed_by": "validator",
+                        "reason": result.reason,
+                    })
                     continue
                 verdict = validate(result.candidate, db)
                 if verdict.aprobado:
                     findings.append(result.candidate)
+                    emitter.emit("finding", lead.entity, result.candidate)
                 else:
                     leads_not_pursued.append(_lead_to_dict(lead, verdict.motivo))
+                    emitter.emit("lead_closed", lead.entity, {
+                        "closed_by": "validator",
+                        "reason": verdict.motivo,
+                    })
     except EstateNotFoundError as e:
         print(f"[estate] {e}", file=sys.stderr)
         return 2
@@ -84,11 +113,12 @@ def main(argv: list[str] | None = None) -> int:
     findings.sort(key=_finding_sort_key)
     leads_not_pursued.sort(key=_lead_sort_key)
 
+    metadata = metrics.as_dict()
     submission = {
         "seed": seed,
         "findings": findings,
         "leads_not_pursued": leads_not_pursued,
-        "run_metadata": metrics.as_dict(),
+        "run_metadata": metadata,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
@@ -96,6 +126,22 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
         newline="\n",
     )
+    # Nota: `emitter` ya cerro con el `with`; los eventos finales se re-abren
+    # aparte para escribir las tres metricas finales sin depender del context.
+    if not args.no_events:
+        events_path = args.events or (args.out.parent / f"events_{seed:04d}.jsonl")
+        with events_path.open("a", encoding="utf-8", buffering=1, newline="\n") as fh:
+            for line in (
+                {"seq": 10**6, "t": metadata["wall_clock_seconds"], "type": "metrics",
+                 "entity": "", "payload": metadata},
+                {"seq": 10**6 + 1, "t": metadata["wall_clock_seconds"], "type": "run_finished",
+                 "entity": "", "payload": {
+                     "findings": len(findings),
+                     "leads_not_pursued": len(leads_not_pursued),
+                 }},
+            ):
+                fh.write(json.dumps(line, ensure_ascii=True))
+                fh.write("\n")
     print(
         f"{args.out}  findings={len(findings)}  leads={len(leads_not_pursued)}  "
         f"seed={seed}"

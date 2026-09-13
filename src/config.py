@@ -41,10 +41,13 @@ EFOS_DEFINITIVO = "definitivo"
 EFOS_PRESUNTO = "presunto"
 EFOS_DESVIRTUADO = "desvirtuado"
 EFOS_SENTENCIA_FAVORABLE = "sentencia_favorable"
-EFOS_STATUSES = frozenset({
-    EFOS_DEFINITIVO, EFOS_PRESUNTO, EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE,
+# El estado "sentencia favorable" aparece con dos ortografias en el estate:
+# 'sentencia_favorable' (spec) y 'favorable' (generator). Ambas son el mismo
+# estado: el SAT ya resolvio a favor y no se acusa.
+EFOS_EXONERADO = frozenset({
+    EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE, "favorable",
 })
-EFOS_EXONERADO = frozenset({EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE})
+EFOS_STATUSES = frozenset({EFOS_DEFINITIVO, EFOS_PRESUNTO}) | EFOS_EXONERADO
 
 # Compuerta de materialidad para ascender un match EFOS a finding.
 EFOS_MATERIALITY_MIN_FLAGS = 2
