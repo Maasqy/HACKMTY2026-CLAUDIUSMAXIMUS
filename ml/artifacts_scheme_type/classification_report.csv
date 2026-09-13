@@ -1,0 +1,10 @@
+,precision,recall,f1-score,support
+kickback,1.0,1.0,1.0,50.0
+no_esquema,1.0,1.0,1.0,2600.0
+phantom_vendor,1.0,1.0,1.0,50.0
+revenue_inflation,1.0,1.0,1.0,50.0
+round_tripping,1.0,1.0,1.0,50.0
+threshold_splitting,1.0,1.0,1.0,50.0
+accuracy,1.0,1.0,1.0,1.0
+macro avg,1.0,1.0,1.0,2850.0
+weighted avg,1.0,1.0,1.0,2850.0

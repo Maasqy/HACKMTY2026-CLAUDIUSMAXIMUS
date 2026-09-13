@@ -24,8 +24,8 @@ This script lives in estate_gen/, outside src/ — the agent under investigation
 never imports anything from this file or its directory.
 
 Outputs:
-  data/estates/estate_NNNN.db   SQLite, schema = student-materials/forensic-auditor/estate_schema.sql
-  eval/answers/gt_NNNN.json     ground truth, schema = student-materials/forensic-auditor/ground_truth_schema.json
+  data/estates/estate_NNNN.db   SQLite, schema = docs/spec/estate_schema.sql
+  eval/answers/gt_NNNN.json     ground truth, schema = docs/spec/ground_truth_schema.json
 
 gt_NNNN.json is the answer key. Per the track rules it must never be read by
 the agent under investigation, its tools, or anything they import — only by
@@ -57,7 +57,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-DEFAULT_SAT_CSV = REPO_ROOT / "Listado_completo_69-B.csv"
+DEFAULT_SAT_CSV = REPO_ROOT / "data" / "raw" / "Listado_completo_69-B.csv"
 DEFAULT_AMLSIM_TGZ = REPO_ROOT / "AMLSim" / "sample" / "20K_cycle200.tgz"
 DEFAULT_DB_DIR = REPO_ROOT / "data" / "estates"
 DEFAULT_GT_DIR = REPO_ROOT / "eval" / "answers"
@@ -316,7 +316,7 @@ class AMLSimSeed:
 # Estate builder
 # --------------------------------------------------------------------------
 
-SCHEMA_SQL = (REPO_ROOT / "student-materials" / "forensic-auditor" / "estate_schema.sql")
+SCHEMA_SQL = (REPO_ROOT / "docs" / "spec" / "estate_schema.sql")
 
 
 class Estate:
@@ -579,43 +579,53 @@ def build_background(estate: Estate, sat_pool, aml: "AMLSimSeed"):
 
 
 def build_sat_status_population(estate: Estate, sat_pool, aml: "AMLSimSeed"):
-    """Plants several REAL 69-B RFCs as ordinary vendors (full invoicing,
-    PO, ledger and payment history) spanning all four real SAT statuses —
-    not just as inert rows in efos_list. This is what makes 'situacion_sat'
-    (the real government classification) a meaningful, learnable label per
-    vendor rather than a label with only one example per estate:
+    """Plants a few REAL 69-B RFCs as ordinary vendors (full invoicing, PO,
+    ledger and payment history).
 
-      Desvirtuado          real, administratively CLEARED taxpayer
-      Sentencia Favorable  real, court-CLEARED taxpayer
-      Presunto             real, still-unresolved case
-      Definitivo           already covered by S1_phantom_vendor
+    estate_schema.sql's efos_list.status is ONLY 'definitivo' | 'presunto'
+    — those are the two real SAT categories the official schema defines,
+    and the only ones a judge's own held-out estate will ever contain.
+    'Desvirtuado' and 'Sentencia Favorable' are real, government-confirmed
+    CLEARED outcomes and stay excellent decoy material (a real RFC that WAS
+    on the 69-B radar and came out clean is exactly the kind of
+    honest-but-suspicious-looking vendor a decoy set needs) — but they must
+    NEVER be written into efos_list, since that column can't hold a value
+    the official schema doesn't define, and a model trained on a status the
+    judges' estate can never produce would be trained on a distribution
+    that doesn't exist in production.
 
-    Desvirtuado/Favorable vendors behave like ordinary honest background
-    vendors (that is the point — they are real government-confirmed
-    non-fraud examples). Presunto vendors get a slightly rougher paper
-    trail (lower payment-traceability rate) since an unresolved case is
-    genuinely ambiguous, not because 'presunto' should be a fraud proxy.
+    So: 'presunto' vendors go into efos_list with that real status (a
+    genuinely unresolved case — a legitimate, schema-valid ambiguous
+    signal). 'Desvirtuado'/'Favorable' vendors get the same honest
+    treatment but are recorded ONLY as ground-truth decoy entries (returned
+    here, appended to the estate's decoys list by generate()) — never as an
+    efos_list row.
+
     Call this AFTER build_schemes so S1's phantom (definitivo) RFC is
-    already excluded via the current vendor list.
+    already excluded via the current vendor list. Returns a list of decoy
+    dicts (same shape as build_decoys' entries) for the desvirtuado/
+    favorable vendors planted.
     """
     rng = estate.rng
     used_rfcs = {v["rfc"] for v in estate.vendors}
+    decoys_extra = []
 
     def pick(status_norm, n):
         pool = [r for r in sat_pool if r["status_norm"] == status_norm and r["rfc"] not in used_rfcs]
         rng.shuffle(pool)
         return pool[:n]
 
-    def plant(r, category, pay_prob):
+    def plant(r, category, pay_prob, add_to_efos_list):
         registered = draw_registered_date(rng, estate._period_start, recent_prob=0.25)
         v = estate.add_vendor(r["rfc"], r["legal_name"], registered, category=category)
         used_rfcs.add(r["rfc"])
-        if not any(e["rfc"] == r["rfc"] for e in estate.efos_list):
+        if add_to_efos_list and not any(e["rfc"] == r["rfc"] for e in estate.efos_list):
             estate.efos_list.append({"rfc": r["rfc"], "legal_name": r["legal_name"],
                                       "status": r["status_norm"], "publication_date": estate.rand_date()})
         if rng.random() < 0.6:
             estate.add_contract(r["rfc"], registered, rng.uniform(150000, 600000),
                                  f"Contrato de {category.lower()}")
+        invs = []
         for _ in range(rng.randint(3, 7)):
             dt = estate.rand_date()
             subtotal = draw_amount(rng, aml, *BAND_SERVICIO_RECURRENTE)
@@ -633,13 +643,35 @@ def build_sat_status_population(estate: Estate, sat_pool, aml: "AMLSimSeed"):
                 pay_date = (date.fromisoformat(dt) + timedelta(days=rng.randint(1, 30))).isoformat()
                 estate.add_bank_txn(pay_date, estate.company_clabe, v["bank_clabe"],
                                      inv["total"], f"Pago factura {inv['uuid'][:8]}")
+            invs.append(inv["uuid"])
+        return invs
+
+    for r in pick("presunto", 2):
+        plant(r, rng.choice(CATEGORIES), pay_prob=0.65, add_to_efos_list=True)
 
     for r in pick("desvirtuado", 2):
-        plant(r, rng.choice(CATEGORIES), pay_prob=0.85)
+        invs = plant(r, rng.choice(CATEGORIES), pay_prob=0.85, add_to_efos_list=False)
+        decoys_extra.append({
+            "entity": f"RFC:{r['rfc']}", "signal": "exonerated_69b_history",
+            "why_innocent": "RFC con historial real de investigacion 69-B, status 'Desvirtuado' "
+                            "(el contribuyente desvirtuo la presuncion ante el SAT). No aparece en "
+                            "efos_list de esta estate porque el schema oficial solo admite "
+                            "'definitivo'/'presunto' para esa tabla.",
+            "invoices": invs,
+        })
+
     for r in pick("favorable", 2):
-        plant(r, rng.choice(CATEGORIES), pay_prob=0.85)
-    for r in pick("presunto", 2):
-        plant(r, rng.choice(CATEGORIES), pay_prob=0.65)
+        invs = plant(r, rng.choice(CATEGORIES), pay_prob=0.85, add_to_efos_list=False)
+        decoys_extra.append({
+            "entity": f"RFC:{r['rfc']}", "signal": "exonerated_69b_history",
+            "why_innocent": "RFC con historial real de investigacion 69-B, status 'Sentencia "
+                            "Favorable' (el contribuyente gano en tribunales). No aparece en "
+                            "efos_list de esta estate porque el schema oficial solo admite "
+                            "'definitivo'/'presunto' para esa tabla.",
+            "invoices": invs,
+        })
+
+    return decoys_extra
 
 
 def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
@@ -995,9 +1027,11 @@ def build_decoys(estate: Estate, sat_pool):
                     "invoices": invs})
 
     # 7. efos_list match, but publication postdates every transaction.
+    # Uses 'presunto' — the only OTHER schema-valid efos_list status besides
+    # 'definitivo' — never 'desvirtuado'/'favorable', which never belong in
+    # efos_list at all (see build_sat_status_population).
     existing_rfcs = {v["rfc"] for v in estate.vendors}
-    cleared_pool = [r for r in sat_pool if r["status_norm"] in ("desvirtuado", "favorable")
-                    and r["rfc"] not in existing_rfcs]
+    cleared_pool = [r for r in sat_pool if r["status_norm"] == "presunto" and r["rfc"] not in existing_rfcs]
     r = rng.choice(cleared_pool) if cleared_pool else rng.choice(sat_pool)
     v = estate.add_vendor(r["rfc"], r["legal_name"], "2019-01-01", category="Consultoria")
     estate.add_contract(v["rfc"], "2019-02-01", 300000.0, "Contrato de servicios con materialidad")
@@ -1090,8 +1124,9 @@ def generate(seed: int, db_dir: Path, gt_dir: Path, sat_csv: Path, amlsim_tgz: P
 
     build_background(estate, sat_pool, aml)
     schemes = build_schemes(estate, sat_pool, aml)
-    build_sat_status_population(estate, sat_pool, aml)
+    decoys_extra_sat = build_sat_status_population(estate, sat_pool, aml)
     decoys = build_decoys(estate, sat_pool)
+    decoys.extend(decoys_extra_sat)
 
     db_dir.mkdir(parents=True, exist_ok=True)
     gt_dir.mkdir(parents=True, exist_ok=True)
