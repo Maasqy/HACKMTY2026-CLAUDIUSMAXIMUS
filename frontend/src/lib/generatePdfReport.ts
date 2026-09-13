@@ -3,40 +3,101 @@ import type { Finding, Submission } from "@/types/submission";
 import { formatMxn } from "@/lib/formatMxn";
 
 // One-click PDF export for a Finding. Builds a light-theme, print-friendly
-// DOM subtree off-screen, hands it to html2pdf.js, and triggers a browser
-// download. Does not rely on window.print() (which requires the user to know
-// to pick "Save as PDF" as destination and can be blocked by pop-up policies).
+// DOM subtree that is present in the DOM (so html2canvas can render it) but
+// invisible to the user (opacity:0), hands it to html2pdf.js, and triggers
+// a browser download. Does not use window.print() (silent hang in some
+// browsers + requires the user to pick Save-as-PDF as destination).
+//
+// Why the element is NOT positioned at `left:-10000px`: html2canvas needs
+// the element inside the viewport bounds to compute layout; offscreen
+// elements produce blank/empty canvases in Chrome and Safari.
 export async function downloadFindingPdf(
   finding: Finding,
   submission: Submission,
   caseNumber: string,
   companyRfc: string = "UDA230508OIG",
 ): Promise<void> {
+  // 8.5in @ 96dpi = 816px; use letter width in pixels so html2canvas sees
+  // a well-defined viewport.
+  const PAGE_WIDTH_PX = 816;
+
+  // Reliable technique: render container VISIBLY on top of the page under a
+  // white overlay with a "Generating PDF…" spinner, so html2canvas captures
+  // it correctly (all offscreen tricks — `left: -9999px`, `top: -99999px`,
+  // `opacity: 0` — produced blank 3KB PDFs in practice because html2canvas
+  // needs the target element in the visible viewport with real dimensions).
+  // User sees an intentional loading overlay for ~2s, then the download
+  // fires and the overlay is removed. Feels like a real product operation.
+  const overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.zIndex = "100000";
+  overlay.style.background = "rgba(10,10,10,0.85)";
+  overlay.style.display = "flex";
+  overlay.style.flexDirection = "column";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "flex-start";
+  overlay.style.padding = "40px 0";
+  overlay.style.overflow = "auto";
+  overlay.setAttribute("role", "status");
+  overlay.setAttribute("aria-label", "Generating PDF report");
+
+  const spinner = document.createElement("div");
+  spinner.style.color = "#A44200";
+  spinner.style.fontFamily = "'Fira Code', monospace";
+  spinner.style.fontSize = "12px";
+  spinner.style.letterSpacing = "0.15em";
+  spinner.style.textTransform = "uppercase";
+  spinner.style.marginBottom = "16px";
+  spinner.style.background = "rgba(0,0,0,0.6)";
+  spinner.style.padding = "8px 16px";
+  spinner.style.borderRadius = "4px";
+  spinner.style.border = "1px solid #A44200";
+  spinner.textContent = "Generating PDF report…";
+  overlay.appendChild(spinner);
+
   const container = document.createElement("div");
-  container.style.position = "fixed";
-  container.style.left = "-10000px";
-  container.style.top = "0";
-  container.style.width = "210mm";
+  container.style.width = `${PAGE_WIDTH_PX}px`;
   container.style.background = "#ffffff";
   container.style.color = "#0a0a0a";
   container.style.fontFamily = "'Fira Sans', Arial, sans-serif";
+  container.style.padding = "40px 48px";
+  container.style.boxSizing = "border-box";
+  container.style.boxShadow = "0 20px 60px rgba(0,0,0,0.4)";
   container.innerHTML = buildReportHtml(finding, submission, caseNumber, companyRfc);
-  document.body.appendChild(container);
+  overlay.appendChild(container);
+  document.body.appendChild(overlay);
+
+  // Wait for fonts (Fira Sans / Fira Code) before rasterising, otherwise
+  // html2canvas may snapshot the page mid-swap with the fallback font.
+  if (typeof document !== "undefined" && "fonts" in document) {
+    try { await (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready; } catch { /* ignore */ }
+  }
+  // Give the browser one paint frame to lay everything out.
+  await new Promise<void>((r) => requestAnimationFrame(() => r()));
 
   try {
     await html2pdf()
       .set({
-        margin: [12, 14, 16, 14],
+        margin: 0,
         filename: `${caseNumber}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false },
-        jsPDF: { unit: "mm", format: "letter", orientation: "portrait" },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          allowTaint: false,
+          backgroundColor: "#ffffff",
+          logging: false,
+          letterRendering: true,
+          windowWidth: PAGE_WIDTH_PX,
+        },
+        jsPDF: { unit: "in", format: "letter", orientation: "portrait" },
         pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-avoid-break"] },
       })
       .from(container)
       .save();
   } finally {
-    document.body.removeChild(container);
+    document.body.removeChild(overlay);
   }
 }
 
