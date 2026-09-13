@@ -2,49 +2,73 @@
   "findings": [],
   "leads_not_pursued": [
     {
-      "entity": "RFC:SVP200815KL9",
-      "signal": "kickback, round_tripping",
-      "reason": "Corrida sin modelo (solo etapas deterministas): no se investigo ningun lead.",
-      "tool_calls_made": [],
+      "entity": "RFC:STD210615MN8",
+      "signal": "kickback, threshold_splitting",
+      "reason": "El validador rechazo la acusacion: entity 'EMP:Hector Lomeli Prado' no cumple el formato RFC:xxx / EMP:0001",
+      "tool_calls_made": [
+        "obtener_ordenes_compra",
+        "obtener_facturas",
+        "obtener_proveedor",
+        "perfil_proveedor",
+        "obtener_transferencias"
+      ],
       "closed_by": "validator"
     },
     {
-      "entity": "EMP:0007",
-      "signal": "kickback",
-      "reason": "Corrida sin modelo (solo etapas deterministas): no se investigo ningun lead.",
-      "tool_calls_made": [],
+      "entity": "RFC:CCP190722XB1",
+      "signal": "round_tripping",
+      "reason": "El validador rechazo la acusacion: entity 'CLABE:012180001111000005' no cumple el formato RFC:xxx / EMP:0001; peso_amount 1,115,000.00 no reconcilia con ninguna tabla citada por separado (la mas cercana es bank_txns=1,220,000.00; [bank_txns=1,220,000.00, contracts=720,000.00]; desviacion 9.42%, tolerancia 2%)",
+      "tool_calls_made": [
+        "obtener_transferencias",
+        "obtener_transferencia",
+        "obtener_transferencia",
+        "obtener_transferencia",
+        "obtener_proveedor",
+        "obtener_contratos",
+        "obtener_ordenes_compra",
+        "obtener_ordenes_compra"
+      ],
       "closed_by": "validator"
     },
     {
-      "entity": "RFC:AAA120730823",
-      "signal": "phantom_vendor",
-      "reason": "Corrida sin modelo (solo etapas deterministas): no se investigo ningun lead.",
-      "tool_calls_made": [],
-      "closed_by": "validator"
-    },
-    {
-      "entity": "RFC:PAP110603RE5",
-      "signal": "senales genericas",
-      "reason": "Corrida sin modelo (solo etapas deterministas): no se investigo ningun lead.",
-      "tool_calls_made": [],
-      "closed_by": "validator"
+      "entity": "RFC:ACM980415TY2",
+      "signal": "round_tripping",
+      "reason": "La hipótesis de round-tripping no se sostiene debido a la falta de evidencia de transacciones fraudulentas. Si bien el clasificador sugirió este esquema, la investigación no encontró facturas relacionadas con el proveedor, lo que impide confirmar el round-tripping. La falta de información sobre los solicitantes y aprobadores de las órdenes de compra limita la capacidad de evaluar más a fondo la situación.",
+      "tool_calls_made": [
+        "obtener_proveedor",
+        "perfil_proveedor",
+        "obtener_facturas",
+        "obtener_ordenes_compra",
+        "obtener_empleados",
+        "obtener_empleado",
+        "obtener_empleados",
+        "obtener_empleado",
+        "obtener_contratos",
+        "traza_pagos"
+      ],
+      "closed_by": "investigator"
     }
   ],
   "run_metadata": {
-    "llm_calls": 0,
-    "mxn_cost": 0.0,
-    "wall_clock_seconds": 0.02,
+    "llm_calls": 26,
+    "mxn_cost": 0.2882,
+    "wall_clock_seconds": 297.63,
     "deterministic": true,
     "etapas_segundos": {
-      "deterministico_cart": 0.0197
+      "deterministico_cart": 0.0097,
+      "investigador_llm": 297.6108,
+      "validator": 0.0098
     },
     "embudo": {
-      "leads_generados": 4,
-      "leads_investigados": 0,
-      "rechazados_por_validator": 0,
+      "leads_generados": 3,
+      "leads_investigados": 3,
+      "rechazados_por_validator": 2,
       "descartados_por_challenger": 0,
       "findings_finales": 0
     },
+    "cache_hits": 0,
+    "prompt_tokens": 69491,
+    "completion_tokens": 2550,
     "cost_by_role": {}
   },
   "seed": 0

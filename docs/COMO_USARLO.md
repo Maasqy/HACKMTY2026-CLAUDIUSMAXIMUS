@@ -1,11 +1,12 @@
 # Como usarlo
 
-Cuatro cosas distintas que la gente quiere hacer con esto, y el comando de cada una.
+Cinco cosas distintas que la gente quiere hacer con esto, y el comando de cada una.
 
 1. [Verificar que todo funciona](#1-verificar-que-todo-funciona)
 2. [Ver por que el sistema decidio lo que decidio](#2-abrir-la-caja-negra)
 3. [Meter datos propios desde Excel](#3-meter-datos-propios)
 4. [Sacar el reporte de un caso y su trazabilidad](#4-un-caso-concreto-en-excel-y-su-trazabilidad)
+5. [Usar la interfaz web](#5-la-interfaz-web)
 
 Antes de nada, una vez:
 
@@ -352,3 +353,62 @@ cada llamada (`LLM_NUM_CTX` en `src/config.py`, default 8192,
 sobreescribible con `FORENSIC_LLM_NUM_CTX`) en vez de depender del default
 de Ollama. El paso 5a2 de `verificar_todo.sh` comprueba, con un servidor
 falso, que `num_ctx` siempre viaja en el request.
+
+## 5. La interfaz web
+
+### El flujo completo, sin salir del navegador
+
+```bash
+python3 -m src.api          # servidor local, puerto 8000, sin dependencias extra
+cd frontend && npm run dev  # en otra terminal
+```
+
+Abre http://localhost:5173 → **Upload** → sube los ocho CSV (o adjunta un
+`.db` que ya tengas) → **Run investigation**. El progreso aparece en vivo,
+las mismas líneas que imprime `python3 -m src.run` en la terminal, y al
+terminar el dashboard se actualiza solo.
+
+`scripts/generar_ejemplo_frontend.py` genera los ocho CSV de prueba con los
+dos casos sembrados, en el formato exacto que esa pantalla espera.
+
+### Sin servidor, por terminal
+
+Sigue funcionando igual que siempre:
+
+```bash
+python3 -m src.run --estate data/estates/mis_proveedores.db \
+    --out out/submission.json --max-leads 4 --events out/events.jsonl
+bash scripts/refresh_frontend_snapshots.sh
+```
+
+Y después recargas la página. `bash scripts/demo_desde_db.sh` hace las dos
+cosas de un jalón desde un `.db` descargado, e imprime el antes y el
+después de lo que el dashboard está leyendo.
+
+### Por qué el `.db` descargado no aparecía solo en el dashboard
+
+Porque el dashboard nunca lee un `.db`: lee `submission.json`. La pantalla
+Upload solo construía el archivo y te lo descargaba — el estate era el
+*insumo* del pipeline de Python, no un resultado que la UI mostrara.
+
+Eso dejaba un hueco más grave: los exhibits no se podían comprobar. Un
+finding cita `bank_txns/T-0015`, y al expandirlo salía la nota que el
+propio modelo escribió sobre ese registro — el acusado redactando su
+evidencia. La UI afirmaba "every exhibit ID corresponds to a record in the
+SQLite estate" sin poder demostrarlo.
+
+Ahora el navegador **conserva** el estate (en IndexedDB, porque el flujo
+por terminal exige recargar la página):
+
+- cada exhibit se abre al registro real, con palomita o tache según exista;
+  un `record_id` inventado sale en rojo en vez de pasar desapercibido
+- el panel **Verification** rehace la reconciliación de pesos en el
+  navegador y la enseña: declarado contra suma citada por tabla, desviación
+  y tolerancia
+- el overview muestra los datos cargados, tabla por tabla
+
+La reconciliación del navegador es espejo de `src/config.py`
+(`AMOUNT_TABLES`, `PESO_TOLERANCE`) y suma **por tabla, nunca entre
+tablas** — la misma regla del validador de Python. Si divergieran, la UI
+pintaría una palomita verde sobre algo que los jueces rechazan, que es el
+peor error posible aquí.

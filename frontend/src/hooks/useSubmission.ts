@@ -5,6 +5,7 @@
 import {
   createContext,
   createElement,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -14,11 +15,25 @@ import { loadSubmission } from "@/lib/loadSubmission";
 import { MOCK_SUBMISSION } from "@/mocks/submission.mock";
 import type { Submission } from "@/types/submission";
 
+/** De donde salieron los datos que se estan viendo. `mock` no es un error:
+ * es el estado honesto de "todavia no hay una corrida que mostrar". */
+export type SubmissionSource = "mock" | "file" | "server";
+
 export interface SubmissionContextValue {
   submission: Submission;
   isMock: boolean;
   isLoading: boolean;
   error: Error | null;
+  source: SubmissionSource;
+  /** Cuando se produjo lo que se esta viendo: Last-Modified del archivo, o
+   * la hora en que el servidor local entrego el resultado. null = se
+   * desconoce (o son datos de ejemplo). */
+  producedAt: Date | null;
+  /** Entrega un submission recien producido por el servidor local
+   * (src/api.py) para que el dashboard lo tome sin recargar la pagina. El
+   * servidor ademas lo escribe en frontend/public/out/, asi que un reload
+   * despues muestra lo mismo. */
+  applySubmission: (next: Submission) => void;
 }
 
 const SubmissionContext = createContext<SubmissionContextValue | null>(null);
@@ -37,15 +52,19 @@ export function SubmissionProvider({
   const [isMock, setIsMock] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
+  const [source, setSource] = useState<SubmissionSource>("mock");
+  const [producedAt, setProducedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     loadSubmission(url)
       .then((data) => {
         if (cancelled) return;
-        setSubmission(data);
+        setSubmission(data.submission);
         setIsMock(false);
         setError(null);
+        setSource("file");
+        setProducedAt(data.lastModified);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -63,7 +82,17 @@ export function SubmissionProvider({
     };
   }, [url]);
 
-  const value: SubmissionContextValue = { submission, isMock, isLoading, error };
+  const applySubmission = useCallback((next: Submission) => {
+    setSubmission(next);
+    setIsMock(false);
+    setError(null);
+    setSource("server");
+    setProducedAt(new Date());
+  }, []);
+
+  const value: SubmissionContextValue = {
+    submission, isMock, isLoading, error, applySubmission, source, producedAt,
+  };
   return createElement(SubmissionContext.Provider, { value }, children);
 }
 

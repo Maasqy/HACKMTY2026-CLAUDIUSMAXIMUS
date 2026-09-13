@@ -1,6 +1,8 @@
 import { Routes, Route, Link, NavLink, useLocation, useParams, Navigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { SubmissionProvider, useSubmission } from "@/hooks/useSubmission";
+import { EstateProvider, useEstate } from "@/hooks/useEstate";
+import { lookupRecord, reconcile, PESO_TOLERANCE } from "@/lib/estateStore";
 import { useEventStream } from "@/hooks/useEventStream";
 import { useSweepData } from "@/hooks/useSweepData";
 import { formatMxn } from "@/lib/formatMxn";
@@ -11,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { downloadFindingPdf } from "@/lib/generatePdfReport";
 import type { Exhibit, Finding, LeadNotPursued } from "@/types/submission";
 import type { Event as ForensicEvent } from "@/types/events";
-import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw, Brain, Search, Wrench, FileText, AlertTriangle, CheckCircle2, XCircle, Printer, Upload as UploadIcon, Info } from "lucide-react";
+import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw, Brain, Search, Wrench, FileText, AlertTriangle, CheckCircle2, XCircle, Printer, Upload as UploadIcon, Info, Database as DatabaseIcon } from "lucide-react";
 import Upload from "@/routes/Upload";
 import About from "@/routes/About";
 
@@ -40,12 +42,38 @@ function usePageTitle() {
   }, [location.pathname]);
 }
 
+/** De donde vienen los datos en pantalla y de cuando son.
+ *
+ * Existe por una pregunta que costo dos rondas de depuracion: "corri el
+ * pipeline otra vez y la pantalla se ve igual, ¿se actualizo o no?". Con
+ * datos de prueba que producen los mismos leads, eso es imposible de
+ * responder a ojo. La hora de la corrida lo responde sin ambiguedad. */
 function MockBanner() {
-  const { isMock, isLoading } = useSubmission();
-  if (isLoading || !isMock) return null;
+  const { isMock, isLoading, source, producedAt } = useSubmission();
+  if (isLoading) return null;
+
+  if (isMock) {
+    return (
+      <div role="status" className="mono text-[11px] bg-primary/10 text-primary/90 border-b border-primary/30 px-4 py-1.5 text-center tracking-wide print:hidden">
+        DEMO MODE · sample data, no run loaded yet — go to <span className="font-semibold">Load Data</span> to package your own company ledgers into an audit-ready estate.db
+      </div>
+    );
+  }
+
+  const cuando = producedAt
+    ? producedAt.toLocaleString(undefined, { dateStyle: "short", timeStyle: "medium" })
+    : "hora desconocida";
+
   return (
-    <div role="status" className="mono text-[11px] bg-primary/10 text-primary/90 border-b border-primary/30 px-4 py-1.5 text-center tracking-wide print:hidden">
-      DEMO MODE · seed 0042 sample estate — go to <span className="font-semibold">Load Data</span> to package your own company ledgers into an audit-ready estate.db
+    <div role="status" className="mono text-[10px] bg-surface text-muted-foreground border-b border-border px-4 py-1 text-center tracking-wide print:hidden">
+      {source === "server" ? (
+        <>showing a live run · received just now</>
+      ) : (
+        <>
+          showing <span className="text-foreground">out/submission.json</span> · {cuando}
+          <span className="text-muted-foreground/60"> — older than your last run? then the output never reached frontend/public/out/</span>
+        </>
+      )}
     </div>
   );
 }
@@ -204,6 +232,8 @@ function Overview() {
           </dl>
         </div>
       </section>
+
+      <EstateCard />
     </div>
   );
 }
@@ -366,6 +396,8 @@ function FindingDetail() {
 
       <ReasoningChain entities={f.entities} scheme={f.scheme_type} />
 
+      <VerificationPanel finding={f} />
+
       <ExhibitsSection exhibits={f.exhibits} />
 
       <MoneyTrailSection trail={f.money_trail} />
@@ -413,8 +445,65 @@ function FindingDetail() {
   );
 }
 
+/** Los datos que el auditor cargo, a la vista en el overview.
+ *
+ * Sin esto, el .db que construye la pantalla Upload se descargaba y
+ * desaparecia: el dashboard nunca mostraba ni un renglon de lo que subiste,
+ * solo conclusiones sobre ello. */
+function EstateCard() {
+  const { db, label, tables, totalRows, isLoading } = useEstate();
+
+  if (isLoading) return null;
+
+  if (!db) {
+    return (
+      <section className="rounded-lg border border-dashed border-border bg-surface p-4">
+        <div className="flex items-start gap-2">
+          <DatabaseIcon className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">No estate loaded</h2>
+            <p className="mono text-[10px] text-muted-foreground mt-1">
+              The findings above are being shown without the data they were drawn from, so their exhibits cannot be checked against source records.{" "}
+              <Link to="/upload" className="text-primary hover:underline">Load the estate</Link>.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const present = tables.filter((t) => t.present && t.rows > 0);
+  return (
+    <section className="rounded-lg border border-border bg-surface p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-start gap-2">
+          <DatabaseIcon className="h-4 w-4 text-success shrink-0 mt-0.5" />
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Evidence base</h2>
+            <p className="mono text-[10px] text-muted-foreground mt-0.5">
+              {label} · {totalRows.toLocaleString()} records · exhibits resolve against this
+            </p>
+          </div>
+        </div>
+        <Link to="/upload" className="mono text-[11px] text-primary hover:underline flex items-center gap-1 shrink-0">
+          manage <ChevronRight className="h-3 w-3" />
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2">
+        {present.map((t) => (
+          <div key={t.name}>
+            <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground">{t.name}</div>
+            <div className="mono text-sm text-foreground mt-0.5">{t.rows.toLocaleString()}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ExhibitsSection({ exhibits }: { exhibits: Exhibit[] }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const { db } = useEstate();
   return (
     <section className="rounded-lg border border-border bg-surface overflow-hidden">
       <div className="px-5 py-3 border-b border-border flex items-center justify-between">
@@ -422,7 +511,9 @@ function ExhibitsSection({ exhibits }: { exhibits: Exhibit[] }) {
           <FileText className="h-4 w-4 text-primary" />
           <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Exhibits ({exhibits.length})</h2>
         </div>
-        <span className="mono text-[10px] text-muted-foreground">click a row to expand · reconciles within 2%</span>
+        <span className="mono text-[10px] text-muted-foreground">
+          {db ? "click a row to see the source record" : "load an estate to verify these"}
+        </span>
       </div>
       <ul className="divide-y divide-border">
         {exhibits.map((ex) => {
@@ -436,18 +527,215 @@ function ExhibitsSection({ exhibits }: { exhibits: Exhibit[] }) {
                 <span className="mono text-xs text-primary font-semibold min-w-[3rem]">{ex.exhibit_id}</span>
                 <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground min-w-[8rem]">{ex.source_table}</span>
                 <span className="mono text-xs text-foreground truncate flex-1">{ex.record_id}</span>
+                <ExhibitBadge table={ex.source_table} recordId={ex.record_id} />
                 <ChevronRight className={cn("h-3 w-3 text-muted-foreground transition-transform", open && "rotate-90")} />
               </button>
               {open && (
-                <div className="px-5 pb-4 pt-1 border-t border-border/50 bg-muted/10">
-                  <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">Note</div>
-                  <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">{ex.note}</p>
+                <div className="px-5 pb-4 pt-1 border-t border-border/50 bg-muted/10 space-y-3">
+                  <div>
+                    <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">Note · written by the investigator</div>
+                    <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">{ex.note}</p>
+                  </div>
+                  <ExhibitRecord table={ex.source_table} recordId={ex.record_id} />
                 </div>
               )}
             </li>
           );
         })}
       </ul>
+    </section>
+  );
+}
+
+/** Palomita/tache al lado del exhibit: existe o no existe en el estate.
+ * Sin estate cargado no se afirma nada — no hay contra que comprobar. */
+function ExhibitBadge({ table, recordId }: { table: string; recordId: string }) {
+  const { db } = useEstate();
+  const found = useMemo(() => (db ? lookupRecord(db, table, recordId) !== null : null), [db, table, recordId]);
+  if (found === null) return null;
+  return found
+    ? <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />
+    : <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />;
+}
+
+/** El registro REAL detras del exhibit, leido del estate del auditor.
+ *
+ * Esta es la diferencia entre citar y probar: antes, expandir un exhibit
+ * mostraba la nota que el propio modelo escribio sobre el — el acusado
+ * redactando su propia evidencia. */
+function ExhibitRecord({ table, recordId }: { table: string; recordId: string }) {
+  const { db, isLoading } = useEstate();
+  const record = useMemo(() => (db ? lookupRecord(db, table, recordId) : null), [db, table, recordId]);
+
+  if (isLoading) {
+    return <p className="mono text-[10px] text-muted-foreground">loading estate…</p>;
+  }
+
+  if (!db) {
+    return (
+      <div className="rounded-md border border-dashed border-border px-3 py-2">
+        <p className="mono text-[10px] text-muted-foreground">
+          No estate loaded, so this citation cannot be checked.{" "}
+          <Link to="/upload" className="text-primary hover:underline">Load the estate</Link> to see the source record.
+        </p>
+      </div>
+    );
+  }
+
+  if (!record) {
+    return (
+      <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2">
+        <div className="mono text-[10px] uppercase tracking-wider text-destructive mb-1 flex items-center gap-1">
+          <XCircle className="h-3 w-3" /> not found in estate
+        </div>
+        <p className="mono text-[10px] text-muted-foreground leading-relaxed">
+          <span className="text-foreground">{table}/{recordId}</span> does not exist in the loaded estate. Either this citation is fabricated, or the loaded estate is not the one the pipeline audited.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-success/30 bg-success/5 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-success/20 mono text-[10px] uppercase tracking-wider text-success flex items-center gap-1">
+        <CheckCircle2 className="h-3 w-3" /> source record · {table}
+      </div>
+      <dl className="divide-y divide-border/40">
+        {Object.entries(record).map(([key, value]) => (
+          <div key={key} className="px-3 py-1.5 flex items-baseline gap-3">
+            <dt className="mono text-[10px] uppercase tracking-wider text-muted-foreground min-w-[9rem] shrink-0">{key}</dt>
+            <dd className="mono text-[11px] text-foreground break-all">
+              {value === null || value === "" ? <span className="text-muted-foreground/50">—</span> : String(value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/** La verificacion, rehecha aqui y a la vista.
+ *
+ * El validador de Python ya corrio esto antes de dejar pasar el finding;
+ * repetirlo en el navegador contra el estate que el auditor cargo convierte
+ * "confia en que se valido" en algo que se comprueba en pantalla. Si los
+ * numeros no cuadran, lo mas probable es que el estate cargado no sea el
+ * mismo que audito el pipeline — y eso tambien vale la pena verlo. */
+function VerificationPanel({ finding }: { finding: Finding }) {
+  const { db, label } = useEstate();
+  const recon = useMemo(
+    () => (db ? reconcile(db, finding.peso_amount, finding.exhibits) : null),
+    [db, finding],
+  );
+
+  if (!db || !recon) {
+    return (
+      <section className="rounded-lg border border-dashed border-border bg-surface p-5">
+        <div className="flex items-start gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+          <div>
+            <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Verification</h2>
+            <p className="mono text-[10px] text-muted-foreground/70 mt-1">
+              Nothing loaded to verify against.{" "}
+              <Link to="/upload" className="text-primary hover:underline">Load the estate</Link> and this panel re-runs the peso reconciliation here, in the browser, against the real records.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const good = recon.ok;
+  return (
+    <section className={cn(
+      "rounded-lg border bg-surface p-5 space-y-4",
+      good ? "border-success/40" : "border-destructive/40",
+    )}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2">
+          {good
+            ? <ShieldCheck className="h-4 w-4 text-success shrink-0 mt-0.5" />
+            : <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />}
+          <div>
+            <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Verification · recomputed in this browser</h2>
+            <p className="mono text-[10px] text-muted-foreground/70 mt-0.5">
+              against {label ?? "the loaded estate"} · amounts summed per table, never across
+            </p>
+          </div>
+        </div>
+        <span className={cn(
+          "mono text-[10px] uppercase tracking-wider px-2 py-1 rounded-md shrink-0",
+          good ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive",
+        )}>
+          {good ? "verified" : "does not reconcile"}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground">Exhibits found</div>
+          <div className={cn("mono text-xl font-semibold mt-0.5", recon.missing.length === 0 ? "text-success" : "text-destructive")}>
+            {recon.verified}/{finding.exhibits.length}
+          </div>
+        </div>
+        <div>
+          <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground">Declared</div>
+          <div className="mono text-xl font-semibold mt-0.5 text-foreground">{formatMxn(recon.declared)}</div>
+        </div>
+        <div>
+          <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Cited {recon.bestTable ? `· ${recon.bestTable}` : ""}
+          </div>
+          <div className={cn("mono text-xl font-semibold mt-0.5", recon.reconciles ? "text-success" : "text-destructive")}>
+            {formatMxn(recon.bestSum)}
+          </div>
+        </div>
+      </div>
+
+      {recon.byTable.length > 0 && (
+        <div className="rounded-md border border-border/60 overflow-hidden">
+          <div className="px-3 py-1.5 border-b border-border/60 mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Sum of cited exhibits, per table
+          </div>
+          <ul className="divide-y divide-border/40">
+            {recon.byTable.map((t) => (
+              <li key={t.table} className="px-3 py-1.5 flex items-baseline justify-between gap-3">
+                <span className="mono text-[11px] text-muted-foreground">
+                  {t.table} <span className="text-muted-foreground/60">· {t.count} exhibit{t.count === 1 ? "" : "s"}</span>
+                </span>
+                <span className={cn("mono text-[11px]", t.table === recon.bestTable ? "text-foreground font-semibold" : "text-muted-foreground")}>
+                  {formatMxn(t.sum)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="px-3 py-1.5 border-t border-border/60 flex items-baseline justify-between gap-3">
+            <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground">Deviation vs declared</span>
+            <span className={cn("mono text-[11px]", recon.reconciles ? "text-success" : "text-destructive")}>
+              {recon.deviationPct.toFixed(2)}% · tolerance {(PESO_TOLERANCE * 100).toFixed(0)}%
+            </span>
+          </div>
+        </div>
+      )}
+
+      {recon.missing.length > 0 && (
+        <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2">
+          <div className="mono text-[10px] uppercase tracking-wider text-destructive mb-1">
+            {recon.missing.length} cited record{recon.missing.length === 1 ? "" : "s"} not in the estate
+          </div>
+          <ul className="space-y-0.5">
+            {recon.missing.map((m) => (
+              <li key={m} className="mono text-[10px] text-foreground">• {m}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {recon.byTable.length === 0 && (
+        <p className="mono text-[10px] text-muted-foreground">
+          None of the cited exhibits carry an amount (vendors, efos_list and ledger rows prove a fact, not a peso), so there is nothing to reconcile against — the finding rests on the records themselves.
+        </p>
+      )}
     </section>
   );
 }
@@ -1013,19 +1301,21 @@ function AppShell({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <SubmissionProvider>
-      <AppShell>
-        <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/case" element={<CaseFile />} />
-          <Route path="/case/:findingIndex" element={<FindingDetail />} />
-          <Route path="/live" element={<LiveInvestigation />} />
-          <Route path="/leads" element={<LeadsLog />} />
-          <Route path="/metrics" element={<MetricsDashboard />} />
-          <Route path="/upload" element={<Upload />} />
-          <Route path="/about" element={<About />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </AppShell>
+      <EstateProvider>
+        <AppShell>
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/case" element={<CaseFile />} />
+            <Route path="/case/:findingIndex" element={<FindingDetail />} />
+            <Route path="/live" element={<LiveInvestigation />} />
+            <Route path="/leads" element={<LeadsLog />} />
+            <Route path="/metrics" element={<MetricsDashboard />} />
+            <Route path="/upload" element={<Upload />} />
+            <Route path="/about" element={<About />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </AppShell>
+      </EstateProvider>
     </SubmissionProvider>
   );
 }

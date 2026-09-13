@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
-import { Upload as UploadIcon, FileCheck2, AlertCircle, Loader2, Download, Building2, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { Upload as UploadIcon, FileCheck2, AlertCircle, Loader2, Download, Building2, ShieldCheck, Database as DatabaseIcon, Trash2, Play, ChevronRight, XCircle, CheckCircle2 } from "lucide-react";
 import { ESTATE_TABLES, type TableSpec } from "@/lib/estateSchema";
 import { parseFile, type ParseResult, type Row } from "@/lib/parseCsv";
 import { buildEstate, downloadBytes } from "@/lib/buildEstate";
+import { useEstate } from "@/hooks/useEstate";
+import { useSubmission } from "@/hooks/useSubmission";
+import { fetchHealth, followJob, startInvestigation, type HealthInfo } from "@/lib/apiClient";
 import { cn } from "@/lib/utils";
 
 interface FileState {
@@ -28,6 +32,8 @@ const EMPTY_COMPANY: CompanyInfo = {
 };
 
 export default function Upload() {
+  const { label: estateLabel, tables: estateTables, totalRows: estateRows, adoptEstate, forgetEstate } = useEstate();
+  const [attaching, setAttaching] = useState(false);
   const [company, setCompany] = useState<CompanyInfo>(EMPTY_COMPANY);
   const [files, setFiles] = useState<Record<string, FileState>>(() => {
     const init: Record<string, FileState> = {};
@@ -81,11 +87,32 @@ export default function Upload() {
       });
       const bytes = await buildEstate(parsed);
       const slug = company.rfc || "company";
+      // El estate se queda EN LA APP, no solo se descarga: es contra lo que
+      // el case file va a verificar cada exhibit. Descargarlo sigue siendo
+      // necesario porque el pipeline de Python lo recibe como archivo.
+      await adoptEstate(bytes, `estate_${slug}.db`);
       downloadBytes(bytes, `estate_${slug}.db`);
     } catch (err) {
       setBuildError((err as Error).message);
     } finally {
       setBuilding(false);
+    }
+  }
+
+  // Abrir un .db ya existente — el que descargaste antes, o uno que salio
+  // del generador de Python (data/estates/*.db). Sin esto, un auditor que
+  // ya tiene su estate no puede verificar nada sin reconstruirlo.
+  async function handleAttachDb(file: File | null) {
+    if (!file) return;
+    setBuildError(null);
+    setAttaching(true);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await adoptEstate(bytes, file.name);
+    } catch (err) {
+      setBuildError(`No se pudo abrir ${file.name}: ${(err as Error).message}`);
+    } finally {
+      setAttaching(false);
     }
   }
 
@@ -99,6 +126,64 @@ export default function Upload() {
           Upload the eight ledgers as CSV or XLSX. Fraud Forensics packages them into a deterministic SQLite estate that the Python pipeline can audit — everything happens in your browser, nothing is uploaded.
         </p>
       </header>
+
+      <section className={cn(
+        "rounded-lg border p-5 space-y-3",
+        estateLabel ? "border-success/40 bg-surface" : "border-border bg-surface",
+      )}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <DatabaseIcon className={cn("h-4 w-4", estateLabel ? "text-success" : "text-muted-foreground")} />
+            <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              Estate loaded in this browser
+            </h2>
+          </div>
+          {estateLabel && (
+            <button
+              onClick={() => { void forgetEstate(); }}
+              className="mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-destructive flex items-center gap-1 cursor-pointer"
+            >
+              <Trash2 className="h-3 w-3" /> forget
+            </button>
+          )}
+        </div>
+
+        {estateLabel ? (
+          <>
+            <p className="mono text-xs text-success">
+              {estateLabel} · {estateRows.toLocaleString()} rows
+            </p>
+            <p className="mono text-[10px] text-muted-foreground/70">
+              Every exhibit in the case file now resolves against this estate — the real record, not the model's own note. Peso reconciliation is recomputed here too.
+            </p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+              {estateTables.filter((t) => t.present && t.rows > 0).map((t) => (
+                <span key={t.name} className="mono text-[10px] text-muted-foreground">
+                  {t.name} <span className="text-foreground">{t.rows.toLocaleString()}</span>
+                </span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="mono text-[10px] text-muted-foreground">
+            No estate loaded. Findings will still render, but their exhibits cannot be verified against source records. Build one below, or attach an existing .db.
+          </p>
+        )}
+
+        <label className="block pt-1">
+          <input
+            type="file"
+            accept=".db,.sqlite,.sqlite3"
+            className="hidden"
+            onChange={(e) => { void handleAttachDb(e.target.files?.[0] ?? null); }}
+          />
+          <span className="inline-block cursor-pointer border border-dashed border-border hover:border-primary/40 rounded-md px-3 py-2 mono text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+            {attaching ? "Opening…" : "Attach an existing estate .db (e.g. data/estates/estate_0001.db)"}
+          </span>
+        </label>
+      </section>
+
+      <InvestigatePanel />
 
       <section className="rounded-lg border border-border bg-surface p-5 space-y-3">
         <div className="flex items-center gap-2">
@@ -170,11 +255,204 @@ export default function Upload() {
           {building ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
           {building ? "Building SQLite…" : "Build & download estate.db"}
         </button>
-        <p className="mono text-[10px] text-muted-foreground/70 mt-3">
-          Next: hand the downloaded <code className="text-primary">estate_{company.rfc || "COMPANY"}.db</code> to <code className="text-primary">python -m src.run --estate &lt;path&gt; --out submission.json</code>, then copy the output to <code className="text-primary">frontend/public/out/</code> and reload this page.
-        </p>
+        <div className="mono text-[10px] text-muted-foreground/70 mt-3 space-y-1">
+          <p>
+            The estate stays loaded here for verification. To get findings, the Python side still has to investigate it — that step runs Gemma locally and cannot happen in the browser:
+          </p>
+          <p className="text-primary">bash scripts/demo_desde_db.sh ~/Downloads/estate_{company.rfc || "COMPANY"}.db</p>
+          <p>
+            That runs the pipeline, copies <code>submission.json</code> into <code>frontend/public/out/</code>, and prints what changed. Then reload this page — the estate survives the reload.
+          </p>
+        </div>
       </section>
     </div>
+  );
+}
+
+/** Correr la investigacion sin salir de la pagina.
+ *
+ * El servidor local (src/api.py) es opcional a proposito: si no esta
+ * corriendo, esto explica como levantarlo y el camino por terminal sigue
+ * ahi. Lo que ya no pasa es que el producto te suelte a medio flujo con un
+ * archivo descargado y ninguna instruccion visible. */
+function InvestigatePanel() {
+  const { db, label: estateLabel } = useEstate();
+  const { applySubmission } = useSubmission();
+  const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [maxLeads, setMaxLeads] = useState(4);
+  const [running, setRunning] = useState(false);
+  const [lines, setLines] = useState<string[]>([]);
+  const [result, setResult] = useState<{ findings: number; leads: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const logRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchHealth(ctrl.signal)
+      .then(setHealth)
+      .finally(() => setChecking(false));
+    return () => ctrl.abort();
+  }, []);
+
+  // El log crece hacia abajo: seguir la ultima linea es lo que uno haria
+  // mirando la terminal.
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [lines]);
+
+  async function handleRun() {
+    if (!db) return;
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    setLines([]);
+    try {
+      const bytes = db.export();
+      const jobId = await startInvestigation(bytes, { maxLeads });
+      const final = await followJob(jobId, (nuevas) => {
+        setLines((prev) => [...prev, ...nuevas]);
+      });
+      if (final.status === "error" || !final.submission) {
+        setError(final.error ?? "La investigacion fallo sin decir por que.");
+      } else {
+        applySubmission(final.submission);
+        setResult({
+          findings: final.submission.findings.length,
+          leads: final.submission.leads_not_pursued.length,
+        });
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const serverUp = health !== null;
+  const modelReady = health?.ollama_reachable === true && health?.model_installed === true;
+
+  return (
+    <section className="rounded-lg border border-border bg-surface p-5 space-y-4">
+      <div className="flex items-start gap-2">
+        <Play className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+        <div>
+          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Investigate</h2>
+          <p className="mono text-[10px] text-muted-foreground/70 mt-0.5">
+            Runs the full pipeline — detectors, CART, Gemma, validator, challenger — against the loaded estate.
+          </p>
+        </div>
+      </div>
+
+      {checking ? (
+        <p className="mono text-[10px] text-muted-foreground">checking for the local server…</p>
+      ) : !serverUp ? (
+        <div className="rounded-md border border-dashed border-border px-3 py-3 space-y-1">
+          <p className="mono text-[10px] text-muted-foreground">
+            The local server is not running, so the investigation has to be started from a terminal:
+          </p>
+          <p className="mono text-[10px] text-primary">python3 -m src.api</p>
+          <p className="mono text-[10px] text-muted-foreground/70">
+            It needs no extra dependencies. Leave it running and this panel takes over — or keep using{" "}
+            <span className="text-primary">bash scripts/demo_desde_db.sh</span> instead.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className={cn(
+            "rounded-md border px-3 py-2 flex items-start gap-2",
+            modelReady ? "border-success/30 bg-success/5" : "border-warning/40 bg-warning/5",
+          )}>
+            {modelReady
+              ? <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0 mt-0.5" />
+              : <AlertCircle className="h-3.5 w-3.5 text-warning shrink-0 mt-0.5" />}
+            <div className="mono text-[10px]">
+              {modelReady ? (
+                <span className="text-success">server up · {health?.model} ready</span>
+              ) : !health?.ollama_reachable ? (
+                <span className="text-warning">
+                  server up, but Ollama is not answering at {health?.base_url} — start it with <span className="text-foreground">ollama serve</span>. You can still run without the model (deterministic stages only, no findings).
+                </span>
+              ) : (
+                <span className="text-warning">
+                  server up, but {health?.model} is not installed. Installed: {health?.models_installed.join(", ") || "none"}. Run <span className="text-foreground">bash scripts/setup_llm.sh</span>.
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground">Leads to investigate</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={maxLeads}
+                onChange={(e) => setMaxLeads(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+                className="mono bg-background border border-border rounded-md px-3 py-2 text-sm text-foreground w-28 focus:border-primary focus:outline-none"
+              />
+            </label>
+            <button
+              onClick={() => { void handleRun(); }}
+              disabled={!db || running}
+              className={cn(
+                "mono text-[11px] uppercase tracking-wider px-4 py-2 rounded-md flex items-center gap-2 transition-colors",
+                db && !running
+                  ? "bg-primary text-primary-foreground hover:bg-primary-hover cursor-pointer"
+                  : "bg-muted text-muted-foreground cursor-not-allowed",
+              )}
+            >
+              {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              {running ? "Investigating…" : "Run investigation"}
+            </button>
+            {!db && (
+              <span className="mono text-[10px] text-muted-foreground">load an estate first</span>
+            )}
+            {db && estateLabel && !running && (
+              <span className="mono text-[10px] text-muted-foreground">on {estateLabel}</span>
+            )}
+          </div>
+
+          {(running || lines.length > 0) && (
+            <div
+              ref={logRef}
+              className="rounded-md border border-border bg-background p-3 max-h-56 overflow-y-auto"
+            >
+              {lines.length === 0 ? (
+                <p className="mono text-[10px] text-muted-foreground">
+                  starting… a 12B model takes 10–40s per turn, so the first line can take a moment
+                </p>
+              ) : (
+                <ul className="space-y-0.5">
+                  {lines.map((l, i) => (
+                    <li key={i} className="mono text-[10px] text-muted-foreground whitespace-pre-wrap">{l}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 flex items-start gap-2">
+              <XCircle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+              <p className="mono text-[10px] text-destructive break-all">{error}</p>
+            </div>
+          )}
+
+          {result && (
+            <div className="rounded-md border border-success/40 bg-success/5 px-3 py-2 flex items-center justify-between gap-3">
+              <p className="mono text-[10px] text-success">
+                done · {result.findings} finding{result.findings === 1 ? "" : "s"} · {result.leads} lead{result.leads === 1 ? "" : "s"} not pursued
+              </p>
+              <Link to={result.findings > 0 ? "/case" : "/leads"} className="mono text-[10px] text-primary hover:underline flex items-center gap-1 shrink-0">
+                {result.findings > 0 ? "open case file" : "see why"} <ChevronRight className="h-3 w-3" />
+              </Link>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
