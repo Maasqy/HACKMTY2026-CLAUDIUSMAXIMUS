@@ -1,4 +1,13 @@
 import initSqlJs, { type Database } from "sql.js";
+// Bundled locally (Vite's `?url` import) instead of fetched from
+// sql.js.org at runtime. The CDN fetch is a single point of failure — any
+// network hiccup, ad blocker, or offline demo throws "both async and sync
+// fetching of the wasm failed" right here, even though the exact same
+// wasm file already ships inside node_modules/sql.js/dist/. This also
+// matches the rest of the project: the whole pipeline is designed to run
+// without network access, so the estate-builder shouldn't be the one part
+// that needs it.
+import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { ESTATE_TABLES, type TableSpec } from "./estateSchema";
 import type { Row } from "./parseCsv";
 
@@ -6,7 +15,7 @@ import type { Row } from "./parseCsv";
 // Returns the raw .db bytes ready for download or Python ingestion.
 export async function buildEstate(parsed: Record<string, Row[]>): Promise<Uint8Array> {
   const SQL = await initSqlJs({
-    locateFile: (file) => `https://sql.js.org/dist/${file}`,
+    locateFile: () => sqlWasmUrl,
   });
   const db: Database = new SQL.Database();
 
