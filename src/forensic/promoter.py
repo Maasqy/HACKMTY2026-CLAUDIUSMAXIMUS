@@ -24,12 +24,15 @@ from datetime import date
 from typing import Optional
 
 from src.config import (
+    APPROVAL_LIMIT_MXN,
     EFOS_DEFINITIVO,
     EFOS_EXONERADO,
     EFOS_MATERIALITY_MIN_FLAGS,
     EFOS_PRESUNTO,
     GENERIC_CONCEPT_PATTERNS,
+    KICKBACK_WINDOW_DAYS,
     PESO_TOLERANCE,
+    ROUNDTRIP_WINDOW_DAYS,
     VENDOR_FRESHNESS_DAYS,
 )
 from src.detectors.base import Lead
@@ -44,9 +47,27 @@ class PromotionResult:
 
 
 def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResult:
-    if lead.detector_id != "efos_match":
-        return PromotionResult(None, "el baseline solo asciende leads de efos_match.")
+    router = {
+        "efos_match": _promote_efos_match,
+        "kickback": _promote_kickback,
+        "round_tripping": _promote_round_tripping,
+        # threshold_splitting existe como promoter (ver
+        # _promote_threshold_splitting), pero sobre el sweep 1-50 subia falsas
+        # acusaciones de 0 a 33. El plan es explicito: un detector no entra si
+        # sube las falsas acusaciones. Queda como lead con la senal, no como
+        # finding.
+    }
+    fn = router.get(lead.detector_id)
+    if fn is None:
+        return PromotionResult(
+            None,
+            f"detector {lead.detector_id!r} produce lead con senal reproducible pero "
+            f"sin compuerta de materialidad; se mantiene abierto para revision manual.",
+        )
+    return fn(lead, db, company)
 
+
+def _promote_efos_match(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResult:
     ctx = dict(lead.detector_context)
     status = (ctx.get("efos_status") or "").lower()
 
@@ -218,6 +239,364 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
         "exhibits": exhibits,
         "money_trail": steps,
         "confidence": confidence,
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_kickback(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    vendor_rfc = ctx.get("vendor_rfc", "")
+    emp_id = ctx.get("employee_id", "")
+    original_txn = ctx.get("original_txn", "")
+    kickback_txn = ctx.get("kickback_txn", "")
+    reinforced = int(ctx.get("reinforced_by_pos", "0") or 0)
+
+    if reinforced == 0:
+        return PromotionResult(
+            None,
+            "kickback detectado pero el empleado no aparece como approver/requester "
+            "en POs del vendor; sin ese refuerzo no se acredita conflicto de interes. "
+            "Se mantiene como lead.",
+        )
+
+    original = db.obtener_transferencia(original_txn)
+    kick = db.obtener_transferencia(kickback_txn)
+    vendor = db.obtener_proveedor(vendor_rfc)
+    emp = db.obtener_empleado(emp_id)
+    if not all([original, kick, vendor, emp]):
+        return PromotionResult(None, "no se pudieron cargar las transferencias, vendor o empleado.")
+
+    po_ids = [rid for tbl, rid in lead.suggested_records if tbl == "purchase_orders"]
+    pos_full = []
+    for pid in po_ids:
+        row = db._one("SELECT * FROM purchase_orders WHERE po_id = ?", (pid,))
+        if row is not None:
+            from src.tools.models import PurchaseOrder
+            pos_full.append(PurchaseOrder(**dict(row)))
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    # Solo se cita el bank_txn del kickback: asi la suma per-tabla en bank_txns
+    # queda igual a peso_amount y reconcilia. El pago empresa->vendor se
+    # documenta en la narrativa y en la PO firmada por el empleado (que ya se
+    # cita entre los exhibits).
+    _add(
+        "bank_txns", kick.txn_id,
+        f"Transferencia del proveedor {vendor_rfc} a la CLABE personal del "
+        f"empleado {emp_id} por ${kick.amount:,.2f} MXN el {kick.date} "
+        f"(el pago originante empresa->vendor {original.txn_id} por "
+        f"${original.amount:,.2f} MXN esta narrado y ligado en la PO citada).",
+    )
+    _add(
+        "employees", emp.emp_id,
+        f"Registro del empleado {emp.emp_id} ({emp.name}, {emp.role}) "
+        f"con CLABE {emp.bank_clabe}.",
+    )
+    _add(
+        "vendors", vendor.rfc,
+        f"Registro del proveedor {vendor.rfc} ({vendor.legal_name}) con "
+        f"CLABE {vendor.bank_clabe or 'sin registro'}.",
+    )
+    first_po_id: str | None = None
+    for p in sorted(pos_full, key=lambda x: x.po_id):
+        pid = _add(
+            "purchase_orders", p.po_id,
+            f"PO {p.po_id} por ${p.amount:,.2f} MXN al proveedor {vendor_rfc}, "
+            f"aprobada por {p.approver} y solicitada por {p.requester}.",
+        )
+        if first_po_id is None:
+            first_po_id = p.po_id
+
+    steps = [
+        {
+            "from": f"RFC:{company.rfc}",
+            "to": f"RFC:{vendor.rfc}",
+            "amount": round(original.amount, 2),
+            "date": original.date,
+            "exhibit_id": exhibit_id_by_record[("purchase_orders", first_po_id)]
+                if first_po_id else exhibit_id_by_record[("vendors", vendor.rfc)],
+        },
+        {
+            "from": f"RFC:{vendor.rfc}",
+            "to": f"EMP:{emp.emp_id.replace('EMP:', '')}",
+            "amount": round(kick.amount, 2),
+            "date": kick.date,
+            "exhibit_id": exhibit_id_by_record[("bank_txns", kick.txn_id)],
+        },
+    ]
+
+    pct = kick.amount / original.amount if original.amount else 0
+    narrative = (
+        f"El proveedor {vendor.rfc} ({vendor.legal_name}) recibio "
+        f"${original.amount:,.2f} MXN de la empresa el {original.date}. Dentro de "
+        f"{KICKBACK_WINDOW_DAYS} dias, transfirio ${kick.amount:,.2f} MXN "
+        f"({pct * 100:.1f}%) a la CLABE personal del empleado {emp.emp_id} "
+        f"({emp.name}, {emp.role}), quien firmo {reinforced} orden(es) de compra "
+        f"al mismo proveedor. La CLABE receptora esta registrada en la tabla "
+        f"employees, no es una cuenta corporativa."
+    )
+
+    candidate = {
+        "scheme_type": "kickback",
+        "entities": [f"RFC:{vendor.rfc}", f"EMP:{emp.emp_id.replace('EMP:', '')}"],
+        "narrative": narrative,
+        "rule_broken": (
+            "Conflicto de interes: el empleado que autorizo/solicito la compra "
+            "recibio una transferencia del proveedor beneficiado."
+        ),
+        "peso_amount": round(kick.amount, 2),
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": "proven",
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_round_tripping(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    cycle_txn_ids = [x for x in ctx.get("cycle_txns", "").split(",") if x]
+    txns = [t for t in (db.obtener_transferencia(x) for x in cycle_txn_ids) if t is not None]
+    if len(txns) < 2 or len(txns) != len(cycle_txn_ids):
+        return PromotionResult(None, "no se pudieron cargar todos los bank_txns del ciclo.")
+
+    first = txns[0]
+    last = txns[-1]
+    if first.amount <= 0:
+        return PromotionResult(None, "monto inicial no positivo; no se puede reconciliar.")
+
+    # Intermediarios y sus duenos.
+    intermediates_clabes = [t.to_clabe for t in txns[:-1]]
+    owners = [db.resolver_clabe(c) for c in intermediates_clabes]
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    for i, t in enumerate(txns):
+        if i == 0:
+            note = (
+                f"Salida de la empresa por ${t.amount:,.2f} MXN el {t.date} "
+                f"hacia CLABE {t.to_clabe}."
+            )
+        elif i == len(txns) - 1:
+            note = (
+                f"Retorno a la empresa por ${t.amount:,.2f} MXN el {t.date} "
+                f"desde CLABE {t.from_clabe}, cerrando el ciclo."
+            )
+        else:
+            note = (
+                f"Salto intermedio ${t.amount:,.2f} MXN el {t.date} de CLABE "
+                f"{t.from_clabe} a CLABE {t.to_clabe}."
+            )
+        _add("bank_txns", t.txn_id, note)
+
+    entities: list[str] = []
+    seen_entity: set[str] = set()
+    for owner in owners:
+        if owner.owner_type == "vendor":
+            v = db.obtener_proveedor(owner.owner_id)
+            if v is not None and (("vendors", v.rfc) not in exhibit_id_by_record):
+                _add(
+                    "vendors", v.rfc,
+                    f"Registro del proveedor {v.rfc} ({v.legal_name}) con "
+                    f"CLABE {v.bank_clabe or 'sin registro'}.",
+                )
+            key = f"RFC:{owner.owner_id}"
+            if key not in seen_entity:
+                seen_entity.add(key)
+                entities.append(key)
+        elif owner.owner_type == "employee":
+            emp = db.obtener_empleado(owner.owner_id)
+            if emp is not None and (("employees", emp.emp_id) not in exhibit_id_by_record):
+                _add(
+                    "employees", emp.emp_id,
+                    f"Registro del empleado {emp.emp_id} ({emp.name}, {emp.role}) "
+                    f"con CLABE {emp.bank_clabe}.",
+                )
+            key = f"EMP:{owner.owner_id.replace('EMP:', '')}"
+            if key not in seen_entity:
+                seen_entity.add(key)
+                entities.append(key)
+
+    if not entities:
+        return PromotionResult(
+            None,
+            "el ciclo pasa exclusivamente por CLABEs desconocidos (no vendors ni "
+            "employees registrados); sin contraparte identificable no se puede "
+            "acusar a nadie.",
+        )
+
+    # Money trail: un step por salto, orden cronologico.
+    steps: list[dict] = []
+    for t in txns:
+        from_entity = _clabe_to_entity(db, t.from_clabe, company)
+        to_entity = _clabe_to_entity(db, t.to_clabe, company)
+        steps.append({
+            "from": from_entity,
+            "to": to_entity,
+            "amount": round(t.amount, 2),
+            "date": t.date,
+            "exhibit_id": exhibit_id_by_record[("bank_txns", t.txn_id)],
+        })
+
+    span_days = int(ctx.get("span_days", "0") or 0)
+    delta_pct = abs(last.amount - first.amount) / first.amount
+    total_cycle = round(sum(t.amount for t in txns), 2)
+
+    primary_entity = entities[0]
+    intermediary_frag = (
+        f"y {len(entities) - 1} intermediario(s) adicional(es)"
+        if len(entities) > 1 else "sin intermediarios adicionales identificados"
+    )
+    narrative = (
+        f"En {span_days} dias la empresa envio ${first.amount:,.2f} MXN via "
+        f"{primary_entity} el {first.date} y recibio ${last.amount:,.2f} MXN "
+        f"de retorno el {last.date} tras {len(txns)} saltos "
+        f"(desviacion {delta_pct * 100:.1f}%, {intermediary_frag}). El flujo "
+        f"cierra un ciclo sobre el mismo CLABE de la empresa dentro de "
+        f"{ROUNDTRIP_WINDOW_DAYS} dias, patron caracteristico de simulacion "
+        f"de operaciones."
+    )
+
+    confidence = "proven" if delta_pct <= PESO_TOLERANCE else "probable"
+
+    candidate = {
+        "scheme_type": "round_tripping",
+        "entities": entities,
+        "narrative": narrative,
+        "rule_broken": (
+            "Simulacion de operaciones: los recursos regresan al originante sin "
+            "sustancia economica (CFF art. 69-B, operaciones inexistentes)."
+        ),
+        "peso_amount": total_cycle,
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": confidence,
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_threshold_splitting(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    po_ids = [rid for tbl, rid in lead.suggested_records if tbl == "purchase_orders"]
+    if len(po_ids) < 3:
+        return PromotionResult(
+            None,
+            f"solo {len(po_ids)} POs en el cluster; la senal requiere >=3 para "
+            f"llamar fraccionamiento sistematico.",
+        )
+
+    rfc = lead.entity.split(":", 1)[1]
+    vendor = db.obtener_proveedor(rfc)
+    legal_name = vendor.legal_name if vendor is not None else rfc
+
+    # POs completos.
+    pos = [p for p in (db._one(
+        "SELECT * FROM purchase_orders WHERE po_id = ?", (pid,)
+    ) for pid in po_ids) if p is not None]
+    if len(pos) < 3:
+        return PromotionResult(None, "no se pudieron cargar todas las POs.")
+    from src.tools.models import PurchaseOrder
+    pos = [PurchaseOrder(**dict(p)) for p in pos]
+
+    total = round(sum(p.amount for p in pos), 2)
+    same_approver = ctx.get("same_approver") == "true"
+    approver = ctx.get("approver", "")
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    for p in sorted(pos, key=lambda x: x.po_id):
+        note = (
+            f"PO {p.po_id} por ${p.amount:,.2f} MXN el {p.date}, "
+            f"aprobada por {p.approver or 'sin firma'}."
+        )
+        _add("purchase_orders", p.po_id, note)
+
+    # Facturas del vendor en la ventana de las POs.
+    invoice_uuids = [rid for tbl, rid in lead.suggested_records if tbl == "invoices"]
+    facturas = [f for f in (db.obtener_factura(u) for u in invoice_uuids) if f is not None]
+    for f in sorted(facturas, key=lambda x: x.uuid):
+        _add(
+            "invoices", f.uuid,
+            f"Factura de {rfc} a la empresa por ${f.total:,.2f} MXN el {f.issue_date}.",
+        )
+    if vendor is not None:
+        _add(
+            "vendors", vendor.rfc,
+            f"Registro del proveedor {vendor.rfc} (CLABE {vendor.bank_clabe or 'sin registro'}).",
+        )
+
+    # Money trail: una arista empresa -> vendor, monto = suma POs, fecha = ultima PO.
+    if vendor is not None and vendor.bank_clabe:
+        last_po = max(pos, key=lambda x: x.date)
+        steps = [{
+            "from": f"RFC:{company.rfc}",
+            "to": f"RFC:{rfc}",
+            "amount": total,
+            "date": last_po.date,
+            "exhibit_id": exhibit_id_by_record[("purchase_orders", last_po.po_id)],
+        }]
+    else:
+        steps = []
+
+    approver_frag = (
+        f", todas firmadas por {approver}" if same_approver and approver else ""
+    )
+    narrative = (
+        f"El proveedor {rfc} ({legal_name}) recibio {len(pos)} ordenes de compra "
+        f"entre {min(p.date for p in pos)} y {max(p.date for p in pos)}, cada una "
+        f"debajo de ${APPROVAL_LIMIT_MXN:,.2f} MXN, sumando ${total:,.2f} MXN"
+        f"{approver_frag}. El limite de autorizacion interno se elude al fraccionar "
+        f"lo que economicamente es una sola compra en pedazos independientes."
+    )
+
+    candidate = {
+        "scheme_type": "threshold_splitting",
+        "entities": [f"RFC:{rfc}"],
+        "narrative": narrative,
+        "rule_broken": (
+            f"Politica interna de autorizacion: toda compra superior a "
+            f"${APPROVAL_LIMIT_MXN:,.0f} MXN requiere segunda firma "
+            f"(umbral en src/config.py:APPROVAL_LIMIT_MXN)."
+        ),
+        "peso_amount": total,
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": "proven" if same_approver else "probable",
     }
     return PromotionResult(candidate, "ok")
 

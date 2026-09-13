@@ -10,7 +10,14 @@ from typing import Iterator
 
 import pytest
 
-from src.detectors import efos_match, payment_wo_inv, run_all
+from src.detectors import (
+    efos_match,
+    kickback,
+    payment_wo_inv,
+    round_tripping,
+    threshold_splitting,
+    run_all,
+)
 from src.forensic.company import (
     CompanyDerivationConflict,
     CompanyIdentity,
@@ -357,6 +364,305 @@ def test_validator_rejects_unsupported_entity() -> None:
     with _estate() as db:
         v = validate(c, db)
     assert not v.aprobado and "EMP:9999" in v.motivo
+
+
+def test_kickback_positive_promotes_to_finding() -> None:
+    """Vendor->empleado 5%, empresa->vendor con la misma ventana, empleado en la PO."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:KICK', 'Empleado Kick', 'Comprador', '000000000000000777', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, requester, approver, description)"
+            " VALUES ('PO-KICK-1', ?, '2026-09-01', 200000, 'Empleado Kick', 'Empleado Kick', 'servicios')",
+            (NORMAL_VENDOR,),
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-KICK-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 200000.00, "Pago PO", "SPEI"),
+                ("BNK-KICK-2", "2026-09-07", "000000000000000004", "000000000000000777", 10000.00, "gracias", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = kickback.find_leads(db, _company())
+        entities = [l.entity for l in leads]
+        assert f"RFC:{NORMAL_VENDOR}" in entities
+        lead = next(l for l in leads if l.entity == f"RFC:{NORMAL_VENDOR}")
+        result = promote(lead, db, _company())
+    assert result.candidate is not None
+    cand = result.candidate
+    assert cand["scheme_type"] == "kickback"
+    assert f"EMP:KICK" in cand["entities"] or "EMP:KICK" in " ".join(cand["entities"])
+    assert cand["peso_amount"] == 10000.00
+    with _estate() as db2:
+        conn = db2._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:KICK', 'Empleado Kick', 'Comprador', '000000000000000777', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, requester, approver, description)"
+            " VALUES ('PO-KICK-1', ?, '2026-09-01', 200000, 'Empleado Kick', 'Empleado Kick', 'servicios')",
+            (NORMAL_VENDOR,),
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-KICK-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 200000.00, "Pago PO", "SPEI"),
+                ("BNK-KICK-2", "2026-09-07", "000000000000000004", "000000000000000777", 10000.00, "gracias", "SPEI"),
+            ],
+        )
+        conn.commit()
+        assert validate(cand, db2).aprobado
+
+
+def test_kickback_negative_pct_out_of_range() -> None:
+    """95% no es kickback plausible: la senal no dispara."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:BIG', 'X', 'Y', '000000000000000888', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-BIG-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 100000.00, "", "SPEI"),
+                ("BNK-BIG-2", "2026-09-07", "000000000000000004", "000000000000000888", 95000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = kickback.find_leads(db, _company())
+    assert not any(dict(l.detector_context).get("employee_id") == "EMP:BIG" for l in leads)
+
+
+def test_kickback_negative_no_reinforcing_po_stays_lead() -> None:
+    """Sin PO firmada por el empleado, el promoter no acusa."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:NR', 'Sin Refuerzo', 'X', '000000000000000999', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-NR-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 100000.00, "", "SPEI"),
+                ("BNK-NR-2", "2026-09-07", "000000000000000004", "000000000000000999", 5000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = kickback.find_leads(db, _company())
+        lead = next(l for l in leads if dict(l.detector_context).get("employee_id") == "EMP:NR")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "refuerzo" in result.reason or "approver" in result.reason or "requester" in result.reason
+
+
+def test_threshold_splitting_positive_case() -> None:
+    """3+ POs bajo el limite, ventana <=15d, suma rebasa limite: lead."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO purchase_orders
+            (po_id, vendor_rfc, date, amount, requester, approver, description)
+            VALUES (?,?,?,?,?,?,?)""",
+            [
+                ("PO-SPL-1", NORMAL_VENDOR, "2026-08-01", 40000, "req", "aprovador-x", "servicios"),
+                ("PO-SPL-2", NORMAL_VENDOR, "2026-08-05", 45000, "req", "aprovador-x", "servicios"),
+                ("PO-SPL-3", NORMAL_VENDOR, "2026-08-10", 48000, "req", "aprovador-x", "servicios"),
+            ],
+        )
+        conn.commit()
+        leads = threshold_splitting.find_leads(db, _company())
+    entities = [l.entity for l in leads]
+    assert f"RFC:{NORMAL_VENDOR}" in entities
+    lead = next(l for l in leads if l.entity == f"RFC:{NORMAL_VENDOR}")
+    assert dict(lead.detector_context)["same_approver"] == "true"
+    assert dict(lead.detector_context)["num_pos"] == "3"
+
+
+def test_threshold_splitting_negative_case_below_min_pos() -> None:
+    """Solo 2 POs no dispara aunque suma rebase el limite."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO purchase_orders
+            (po_id, vendor_rfc, date, amount, requester, approver, description)
+            VALUES (?,?,?,?,?,?,?)""",
+            [
+                ("PO-DOS-1", NORMAL_VENDOR, "2026-08-01", 40000, "r", "a", ""),
+                ("PO-DOS-2", NORMAL_VENDOR, "2026-08-02", 40000, "r", "a", ""),
+            ],
+        )
+        conn.commit()
+        leads = threshold_splitting.find_leads(db, _company())
+    assert not any(l.entity == f"RFC:{NORMAL_VENDOR}" for l in leads)
+
+
+def test_threshold_splitting_stays_as_lead_not_finding() -> None:
+    """Por politica del plan: threshold_splitting sube falsas -> lead only."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO purchase_orders
+            (po_id, vendor_rfc, date, amount, requester, approver, description)
+            VALUES (?,?,?,?,?,?,?)""",
+            [
+                ("PO-LDN-1", NORMAL_VENDOR, "2026-08-01", 40000, "r", "a", ""),
+                ("PO-LDN-2", NORMAL_VENDOR, "2026-08-05", 45000, "r", "a", ""),
+                ("PO-LDN-3", NORMAL_VENDOR, "2026-08-10", 48000, "r", "a", ""),
+            ],
+        )
+        conn.commit()
+        leads = threshold_splitting.find_leads(db, _company())
+        lead = next(l for l in leads if l.entity == f"RFC:{NORMAL_VENDOR}")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "revision manual" in result.reason or "no tiene promoter" in result.reason
+
+
+def test_round_tripping_positive_promotes_to_finding() -> None:
+    """Ciclo 3 saltos empresa->V1->V2->empresa, dentro de ventana y tolerancia."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTA080808GG7', 'Roundtrip A', '000000000000000701',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTB090909HH8', 'Roundtrip B', '000000000000000702',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RT-1", "2026-10-01", COMPANY_CLABE, "000000000000000701",
+                 300000.00, "Pago servicios", "SPEI"),
+                ("BNK-RT-2", "2026-10-05", "000000000000000701", "000000000000000702",
+                 300000.00, "Servicios subcontratados", "SPEI"),
+                ("BNK-RT-3", "2026-10-12", "000000000000000702", COMPANY_CLABE,
+                 285000.00, "Reembolso", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+        entity = "RFC:RTA080808GG7"
+        assert entity in [l.entity for l in leads]
+        lead = next(l for l in leads if l.entity == entity)
+        ctx = dict(lead.detector_context)
+        assert ctx["cycle_length"] == "3"
+        assert ctx["first_txn"] == "BNK-RT-1"
+        assert ctx["last_txn"] == "BNK-RT-3"
+        result = promote(lead, db, _company())
+    assert result.candidate is not None, result.reason
+    cand = result.candidate
+    assert cand["scheme_type"] == "round_tripping"
+    assert "RFC:RTA080808GG7" in cand["entities"]
+    assert "RFC:RTB090909HH8" in cand["entities"]
+    assert len(cand["money_trail"]) == 3
+    assert cand["peso_amount"] == 885000.00  # 300k + 300k + 285k
+    with _estate() as db2:
+        conn = db2._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTA080808GG7', 'Roundtrip A', '000000000000000701',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTB090909HH8', 'Roundtrip B', '000000000000000702',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RT-1", "2026-10-01", COMPANY_CLABE, "000000000000000701",
+                 300000.00, "Pago servicios", "SPEI"),
+                ("BNK-RT-2", "2026-10-05", "000000000000000701", "000000000000000702",
+                 300000.00, "Servicios subcontratados", "SPEI"),
+                ("BNK-RT-3", "2026-10-12", "000000000000000702", COMPANY_CLABE,
+                 285000.00, "Reembolso", "SPEI"),
+            ],
+        )
+        conn.commit()
+        v = validate(cand, db2)
+    assert v.aprobado, v.motivo
+
+
+def test_round_tripping_negative_amount_out_of_tolerance() -> None:
+    """Return 50% del envio no cumple la tolerancia 15%."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTC101010II9', 'Roundtrip C', '000000000000000703',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RTC-1", "2026-10-01", COMPANY_CLABE, "000000000000000703",
+                 200000.00, "", "SPEI"),
+                ("BNK-RTC-2", "2026-10-05", "000000000000000703", COMPANY_CLABE,
+                 100000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+    assert not any(l.entity == "RFC:RTC101010II9" for l in leads)
+
+
+def test_round_tripping_negative_window_exceeded() -> None:
+    """Cierre 60 dias despues del envio: fuera de ROUNDTRIP_WINDOW_DAYS=45."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTD111111JJ0', 'Roundtrip D', '000000000000000704',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RTD-1", "2026-08-01", COMPANY_CLABE, "000000000000000704",
+                 150000.00, "", "SPEI"),
+                ("BNK-RTD-2", "2026-09-30", "000000000000000704", COMPANY_CLABE,
+                 148000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+    assert not any(l.entity == "RFC:RTD111111JJ0" for l in leads)
+
+
+def test_round_tripping_unresolvable_intermediate_stays_lead() -> None:
+    """CLABE intermedia no registrada como vendor/employee: se descarta en detector."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RTU-1", "2026-10-01", COMPANY_CLABE, "000000000000009999",
+                 100000.00, "", "SPEI"),
+                ("BNK-RTU-2", "2026-10-05", "000000000000009999", COMPANY_CLABE,
+                 98000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+    assert not any(dict(l.detector_context).get("primary_clabe") == "000000000000009999"
+                   for l in leads)
 
 
 def test_run_all_orders_leads_stably() -> None:
