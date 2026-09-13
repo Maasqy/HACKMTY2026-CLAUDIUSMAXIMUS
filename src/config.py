@@ -40,7 +40,7 @@ MAX_LLM_CALLS_PER_RUN = 120
 # sin editar codigo; el valor de aqui es el que corre si nadie dice otra cosa.
 # `bash scripts/setup_llm.sh --check` compara este valor contra lo que hay
 # instalado y, si no coincide, imprime los tags reales de tu maquina.
-LLM_MODEL = os.environ.get("FORENSIC_LLM_MODEL", "gemma4:12b")
+LLM_MODEL = os.environ.get("FORENSIC_LLM_MODEL", "gemma3:12b")
 LLM_BASE_URL = os.environ.get("FORENSIC_LLM_BASE_URL", "http://localhost:11434")
 LLM_SEED = 7                      # fijo: "same seed -> same case file"
 LLM_TIMEOUT_S = 120.0
