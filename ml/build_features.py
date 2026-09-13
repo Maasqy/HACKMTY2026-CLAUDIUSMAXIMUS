@@ -13,33 +13,67 @@ here.
 What it does: for every estate_NNNN.db under --estates-dir with a matching
 gt_NNNN.json under --gt-dir, computes one feature row per VENDOR (joining
 across all 8 estate tables: vendors, invoices, ledger, bank_txns,
-purchase_orders, contracts, employees, efos_list) and produces TWO labels:
+purchase_orders, contracts, employees, efos_list) and produces labels:
 
-  es_fraude      binary — 1 if the vendor's RFC appears in any planted
-                 scheme's `entities` list (gt_NNNN.json). This is the
-                 "is this vendor part of a fraud scheme I planted" label.
+  scheme_type    multiclass, THE PRIMARY TARGET — one of the five official
+                 scheme_type enum values (phantom_vendor, kickback,
+                 round_tripping, threshold_splitting, revenue_inflation)
+                 if this vendor's RFC appears in a planted scheme's
+                 `entities` list, else 'no_esquema'. This is the actual
+                 judged task: "what kind of fraud scheme, if any, is this
+                 entity part of" — not a proxy for it. Note: if a scheme is
+                 entangled (two schemes sharing an entity, which the spec
+                 allows judges to test but our own generator doesn't yet
+                 plant), this takes the FIRST matching scheme_type; true
+                 multi-label handling is scope for later, flagged in
+                 main()'s output if it ever occurs on this dataset.
 
-  situacion_sat  multiclass — the vendor's REAL SAT Articulo 69-B status
-                 (Definitivo / Presunto / Desvirtuado / Favorable /
-                 Otro / No listado), read straight from efos_list. This is
-                 the real government classification, independent of
-                 whether the vendor happens to be cast in a planted
-                 scheme. Desvirtuado and Favorable are real, confirmed
-                 NON-fraud outcomes (the taxpayer was investigated and
-                 cleared, administratively or in court) — not synthetic
-                 decoys, actual entries from Listado_completo_69-B.csv.
+  es_fraude      binary convenience label, 1 iff scheme_type != 'no_esquema'.
+                 Kept for anyone who wants a binary cut instead of the
+                 5-class one; not itself the primary target anymore.
 
-Scope note: features are computed at the VENDOR level. Four of the five
-scheme types (phantom_vendor, round_tripping, threshold_splitting,
-kickback) are cast with a vendor as the accused entity, so they show up
-here. revenue_inflation is cast with a CLIENT (an invoice receiver_rfc that
-is never inserted into the vendors table), and kickback's employee side
-(EMP:xxxx) is a second entity on that same scheme — neither is a vendor row,
-so neither gets a feature row or a label from this script. That is a known
-limitation of a single flat vendor table, not a bug: extending this to
-client-level and employee-level feature tables is future work, not required
-for the CART exercise below to run and be meaningful on the other four
-scheme types.
+  situacion_sat  multiclass SECONDARY signal, NOT the fraud target — the
+                 vendor's REAL SAT Articulo 69-B status. Only 'definitivo',
+                 'presunto' and 'no_listado' can occur: estate_schema.sql
+                 defines efos_list.status as ONLY 'definitivo' | 'presunto',
+                 so 'desvirtuado'/'favorable' vendors (real, government-
+                 confirmed CLEARED taxpayers, still planted as decoy
+                 material) are recorded in gt_NNNN.json's `decoys`, never in
+                 efos_list — they cannot appear as a situacion_sat value.
+                 Rationale for keeping this at all: a model that flags a
+                 vendor as EFOS-shaped BEFORE the SAT publishes it is a real
+                 pain point ("por el tiempo que tarda en salir en definitivo,
+                 la empresa ya dedujo") — worth reporting as a secondary
+                 signal in the pitch, never as the scheme detector itself.
+
+Scope note: features are computed per ENTITY (RFC), over the UNION of
+vendor RFCs and client RFCs (invoice receiver_rfc where the issuer is the
+audited company) — not vendor RFCs alone. Earlier this script only iterated
+`vendors`, which made it structurally impossible for `revenue_inflation` to
+ever appear as a label: that scheme's accused entity is a CLIENT
+(receiver_rfc), and the generator does not currently make vendor RFCs and
+client RFCs overlap, but nothing about the real world (or a judge's own
+estate) guarantees that they never do — an entity can buy from and sell to
+the same company. So every entity gets BOTH a purchase-side feature group
+(populated if it appears in `vendors`) and a sales-side feature group
+(populated if it appears as an invoice `receiver_rfc` from the company);
+whichever side doesn't apply is filled with neutral defaults (0 counts,
+NaN for the age feature), the same way a vendor that has no PO history
+already gets 0 orden_compra features today. `categoria` is "cliente" for
+an entity with no vendor row at all.
+
+kickback's employee side (EMP:xxxx) is a second entity on that scheme that
+is neither a vendor nor a client RFC — it does not get a feature row here.
+That is a known, separate limitation (employee-level features are future
+work); it does not block the vendor-RFC side of that same scheme from being
+labeled and trained on.
+
+The audited company's own RFC is inferred the same way
+src/tools/estate_access.py's identificar_empresa() does at runtime (the
+receiver_rfc that appears most often across all invoices) — not read from
+gt_NNNN.json — so the features trained on here match exactly what
+src/scoring/features.py can compute during a live run with no ground truth
+available.
 
 Usage:
   python3 ml/build_features.py
@@ -78,9 +112,20 @@ def _clabe_institution(clabe: str) -> str:
 def build_features_for_estate(db_path: Path, gt_path: Path) -> pd.DataFrame:
     seed = int(re.search(r"(\d+)", db_path.stem).group(1))
     gt = json.loads(gt_path.read_text())
-    fraud_entities = set()
+    # entity -> scheme_type, for the primary multiclass label. First match
+    # wins for an entangled entity (see module docstring) — we log if that
+    # ever actually happens on this dataset, in main().
+    entity_to_scheme_type: dict[str, str] = {}
+    entangled_entities: set[str] = set()
     for scheme in gt["schemes"]:
-        fraud_entities.update(scheme["entities"])
+        for entity in scheme["entities"]:
+            if entity in entity_to_scheme_type and entity_to_scheme_type[entity] != scheme["type"]:
+                entangled_entities.add(entity)
+            else:
+                entity_to_scheme_type.setdefault(entity, scheme["type"])
+    if entangled_entities:
+        print(f"  AVISO {db_path.name}: entidad(es) entangled entre esquemas, tomando el primer match: "
+              f"{sorted(entangled_entities)}")
 
     conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     vendors = pd.read_sql("SELECT * FROM vendors", conn)
@@ -97,15 +142,42 @@ def build_features_for_estate(db_path: Path, gt_path: Path) -> pd.DataFrame:
     employee_institutions = {_clabe_institution(c) for c in employee_clabes}
     efos_by_rfc = efos.set_index("rfc").to_dict(orient="index") if not efos.empty else {}
 
+    # Company RFC, inferred the same way identificar_empresa() does at
+    # runtime: the receiver_rfc that appears most often across all invoices
+    # (its own vendors' invoices dominate the count). Never read from gt.
+    company_rfc = (
+        invoices["receiver_rfc"].value_counts().idxmax() if not invoices.empty else ""
+    )
+    company_clabe = (
+        bank_txns["from_clabe"].value_counts().idxmax() if not bank_txns.empty else ""
+    )
+
+    vendor_by_rfc = vendors.set_index("rfc").to_dict(orient="index")
+    vendor_rfcs = set(vendor_by_rfc.keys())
+    client_rfcs = set(invoices.loc[invoices["issuer_rfc"] == company_rfc, "receiver_rfc"].unique())
+    client_rfcs.discard(company_rfc)
+    all_entity_rfcs = sorted(vendor_rfcs | client_rfcs)
+
+    fecha_max_ingreso = None
+    ingresos_all = invoices[invoices["issuer_rfc"] == company_rfc]
+    if not ingresos_all.empty:
+        fecha_max_ingreso = max(date.fromisoformat(d) for d in ingresos_all["issue_date"])
+
     rows = []
-    for _, v in vendors.iterrows():
-        rfc = v["rfc"]
-        v_inv = invoices[invoices["issuer_rfc"] == rfc]
-        v_po = pos[pos["vendor_rfc"] == rfc]
-        v_ctr = contracts[contracts["vendor_rfc"] == rfc]
+    for rfc in all_entity_rfcs:
+        v = vendor_by_rfc.get(rfc)
+        es_proveedor = v is not None
+        es_cliente = rfc in client_rfcs
+
+        # ---- purchase-side (vendor) features — defaults if not a vendor. ----
+        v_inv = invoices[invoices["issuer_rfc"] == rfc] if es_proveedor else invoices.iloc[0:0]
+        v_po = pos[pos["vendor_rfc"] == rfc] if es_proveedor else pos.iloc[0:0]
+        v_ctr = contracts[contracts["vendor_rfc"] == rfc] if es_proveedor else contracts.iloc[0:0]
         v_ledger = ledger[ledger["invoice_uuid"].isin(v_inv["uuid"])]
         # Bank transfers paid by the company TO this vendor's own CLABE.
-        v_txn = bank_txns[bank_txns["to_clabe"] == v["bank_clabe"]]
+        v_txn = (
+            bank_txns[bank_txns["to_clabe"] == v["bank_clabe"]] if es_proveedor else bank_txns.iloc[0:0]
+        )
 
         n_inv = len(v_inv)
         monto_total = float(v_inv["total"].sum()) if n_inv else 0.0
@@ -125,10 +197,14 @@ def build_features_for_estate(db_path: Path, gt_path: Path) -> pd.DataFrame:
         efos_row = efos_by_rfc.get(rfc)
         en_69b = 1 if efos_row is not None else 0
         es_definitivo = 1 if (efos_row and efos_row.get("status") == "definitivo") else 0
+        # Only 'definitivo'/'presunto'/'no_listado' can occur — efos_list
+        # never contains 'desvirtuado'/'favorable' (see module docstring).
         situacion_sat = efos_row.get("status") if efos_row else "no_listado"
 
+        scheme_type = entity_to_scheme_type.get(f"RFC:{rfc}", "no_esquema")
+
         dias_antiguedad = float("nan")
-        if n_inv:
+        if es_proveedor and n_inv:
             primera_factura = v_inv["issue_date"].min()
             dias_antiguedad = _days_between(v["registered_date"], primera_factura)
 
@@ -137,9 +213,13 @@ def build_features_for_estate(db_path: Path, gt_path: Path) -> pd.DataFrame:
             if n_inv else 0.0
         )
 
-        institucion = _clabe_institution(v["bank_clabe"])
-        clabe_identica_a_empleado = int(v["bank_clabe"] in employee_clabes)
-        misma_institucion_que_empleado = int(institucion in employee_institutions)
+        if es_proveedor:
+            institucion = _clabe_institution(v["bank_clabe"])
+            clabe_identica_a_empleado = int(v["bank_clabe"] in employee_clabes)
+            misma_institucion_que_empleado = int(institucion in employee_institutions)
+        else:
+            clabe_identica_a_empleado = 0
+            misma_institucion_que_empleado = 0
 
         # An invoice counts as "paid" if some bank_txn to this vendor's CLABE
         # matches its total within 1% and within 45 days of issue.
@@ -152,10 +232,41 @@ def build_features_for_estate(db_path: Path, gt_path: Path) -> pd.DataFrame:
                 n_pagadas += 1
         pct_sin_pago = float(1 - n_pagadas / n_inv) if n_inv else 0.0
 
+        # ---- sales-side (client) features — 0/NaN if not a client. ----
+        # Revenue invoices the company issued TO this entity.
+        c_inv = invoices[
+            (invoices["issuer_rfc"] == company_rfc) & (invoices["receiver_rfc"] == rfc)
+        ] if es_cliente else invoices.iloc[0:0]
+        # Incoming transfers to the company's own account (matched by amount
+        # only, same tolerance as the vendor side — not by CLABE naming
+        # convention, so this stays robust to how a client's CLABE is
+        # represented).
+        entrantes = bank_txns[bank_txns["to_clabe"] == company_clabe] if company_clabe else bank_txns.iloc[0:0]
+
+        n_inv_venta = len(c_inv)
+        monto_total_venta = float(c_inv["total"].sum()) if n_inv_venta else 0.0
+        monto_prom_venta = float(c_inv["total"].mean()) if n_inv_venta else 0.0
+
+        n_cobradas = 0
+        for _, inv in c_inv.iterrows():
+            match = entrantes[entrantes["amount"].sub(inv["total"]).abs() <= 0.01 * max(inv["total"], 1)]
+            if not match.empty:
+                n_cobradas += 1
+        pct_venta_sin_cobro = float(1 - n_cobradas / n_inv_venta) if n_inv_venta else 0.0
+
+        dias_a_cierre_periodo_venta = float("nan")
+        if n_inv_venta and fecha_max_ingreso is not None:
+            ultima_venta = max(date.fromisoformat(d) for d in c_inv["issue_date"])
+            dias_a_cierre_periodo_venta = (fecha_max_ingreso - ultima_venta).days
+
+        categoria = v["category"] if es_proveedor else "cliente"
+
         rows.append({
             "estate_seed": seed,
             "rfc": rfc,
-            "categoria": v["category"],
+            "es_proveedor": int(es_proveedor),
+            "es_cliente": int(es_cliente),
+            "categoria": categoria,
             "num_facturas": n_inv,
             "monto_total_facturado": round(monto_total, 2),
             "monto_promedio_factura": round(monto_prom, 2),
@@ -179,7 +290,13 @@ def build_features_for_estate(db_path: Path, gt_path: Path) -> pd.DataFrame:
             "clabe_identica_a_empleado": clabe_identica_a_empleado,
             "misma_institucion_bancaria_que_empleado": misma_institucion_que_empleado,
             "monto_total_en_ledger": round(float(v_ledger["debit"].sum()), 2) if len(v_ledger) else 0.0,
-            "es_fraude": int(f"RFC:{rfc}" in fraud_entities),
+            "num_facturas_venta": n_inv_venta,
+            "monto_total_venta": round(monto_total_venta, 2),
+            "monto_promedio_venta": round(monto_prom_venta, 2),
+            "pct_facturas_venta_sin_cobro": round(pct_venta_sin_cobro, 4),
+            "dias_a_cierre_periodo_venta": dias_a_cierre_periodo_venta,
+            "scheme_type": scheme_type,
+            "es_fraude": int(scheme_type != "no_esquema"),
             "situacion_sat": situacion_sat,
         })
 
@@ -214,8 +331,13 @@ def main():
     print(f"estates procesadas: {n_estates}")
     print(f"filas (proveedores) totales: {len(df)}")
     print(f"positivos (es_fraude=1): {n_fraud}  ({n_fraud/len(df)*100:.1f}%)")
-    print("distribucion situacion_sat:")
+    print("distribucion scheme_type (target primario):")
+    print(df["scheme_type"].value_counts().to_string())
+    print("distribucion situacion_sat (senal secundaria):")
     print(df["situacion_sat"].value_counts().to_string())
+    invalid_sat = set(df["situacion_sat"].unique()) - {"definitivo", "presunto", "no_listado"}
+    if invalid_sat:
+        print(f"  ERROR: situacion_sat con valores fuera del schema oficial: {invalid_sat}")
     print(f"escrito: {args.out}")
 
 

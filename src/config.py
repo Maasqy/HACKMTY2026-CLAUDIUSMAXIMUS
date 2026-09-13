@@ -28,70 +28,16 @@ AMOUNT_TABLES = {"invoices": "total", "bank_txns": "amount",
 MAX_STEPS_PER_RUN = 60
 MAX_LLM_CALLS_PER_RUN = 120
 
-# Ventana de reconciliacion para payment_without_invoice: se suman las facturas
-# emitidas por el vendor en el mismo mes calendario del bank_txn.
-RECONCILIATION_WINDOW_MONTHS = 1
+# --- LLM (etapa 3 investigator y etapa 5 challenger) -----------------------
+# El modelo corre local (Ollama) para que la corrida replique sin red, que es
+# requisito de la spec. Todo esto vive en codigo, no en un prompt.
+LLM_MODEL = "gemma3:4b"          # tag exacto de ollama; cambialo aqui, no en el prompt
+LLM_BASE_URL = "http://localhost:11434"
+LLM_SEED = 7                      # fijo: "same seed -> same case file"
+LLM_TIMEOUT_S = 120.0
 
-# threshold_splitting: fraccionamiento de POs bajo el limite de autorizacion.
-SPLIT_WINDOW_DAYS = 15
-SPLIT_MIN_POS = 3
-
-# kickback: retorno del proveedor al empleado que autorizo.
-KICKBACK_WINDOW_DAYS = 30
-KICKBACK_MIN_PCT = 0.03
-KICKBACK_MAX_PCT = 0.30
-
-# round_tripping: ciclo en el grafo dirigido de bank_txns.
-ROUNDTRIP_MAX_HOPS = 4
-ROUNDTRIP_MIN_HOPS = 3
-ROUNDTRIP_WINDOW_DAYS = 45
-# En los estates observados los ciclos toman topologia y montos de AMLSim
-# (cycle200): 4 saltos, ~10 dias, y el monto sufre un decay natural ~95%
-# entre first y last (fees + retiros parciales en cada intermediario). La
-# senal es topologica; se exige solo que retorne una fraccion positiva
-# minima al originante.
-ROUNDTRIP_AMOUNT_TOLERANCE = 0.99
-ROUNDTRIP_MIN_RETURN_PCT = 0.01
-
-# revenue_inflation: facturas emitidas por la empresa sin cobro.
-REVENUE_SETTLE_DAYS = 90
-PERIOD_END_DAYS = 10
-
-# Estados reales del listado 69-B publicado por el SAT.
-# 'definitivo'         -> acusable (efecto retroactivo por 69-B CFF)
-# 'presunto'           -> lead only, la presuncion admite prueba en contrario
-# 'desvirtuado'        -> jamas acusable, el SAT ya resolvio a favor
-# 'sentencia_favorable'-> jamas acusable, tribunal ya resolvio a favor
-EFOS_DEFINITIVO = "definitivo"
-EFOS_PRESUNTO = "presunto"
-EFOS_DESVIRTUADO = "desvirtuado"
-EFOS_SENTENCIA_FAVORABLE = "sentencia_favorable"
-# El estado "sentencia favorable" aparece con dos ortografias en el estate:
-# 'sentencia_favorable' (spec) y 'favorable' (generator). Ambas son el mismo
-# estado: el SAT ya resolvio a favor y no se acusa.
-EFOS_EXONERADO = frozenset({
-    EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE, "favorable",
-})
-EFOS_STATUSES = frozenset({EFOS_DEFINITIVO, EFOS_PRESUNTO}) | EFOS_EXONERADO
-
-# Compuerta de materialidad para ascender un match EFOS a finding.
-EFOS_MATERIALITY_MIN_FLAGS = 2
-
-# Un vendor "fresco" tiene registered_date a menos de esta ventana de la primera
-# factura emitida. Bandera de materialidad.
-VENDOR_FRESHNESS_DAYS = 90
-
-# Conceptos genericos usados como bandera de materialidad. Case-insensitive,
-# substring match sobre concepto_text.
-GENERIC_CONCEPT_PATTERNS = frozenset({
-    "diversos", "servicios varios", "asesoria general", "asesoría general",
-    "servicios profesionales", "consultoria general", "consultoría general",
-    "varios", "gastos generales", "servicios diversos",
-})
-
-# rule_broken con estas palabras se rechaza: describen un patron estadistico,
-# no una regla concreta. Los jueces exigen la regla, no la senal.
-STATISTICAL_RULE_BLOCKLIST = frozenset({
-    "outlier", "anomalia", "anomalía", "z-score", "z score",
-    "desviacion", "desviación", "cluster", "score",
-})
+# Costo imputado por 1k tokens. Un modelo local no factura por token, pero la
+# spec pide un numero de MXN y "0.00 porque corre en nuestra laptop" no dice
+# nada sobre si el enfoque escala. Esta tarifa es la referencia de un modelo
+# hospedado de tamano equivalente, para que la cifra sea comparable.
+MXN_PER_1K_TOKENS = 0.004

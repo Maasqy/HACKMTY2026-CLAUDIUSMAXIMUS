@@ -127,3 +127,17 @@ class ClabeOwner:
     owner_type: str        # "vendor" | "employee" | "company" | "unknown"
     owner_id: str          # rfc, emp_id, "COMPANY", or "" if unknown
     owner_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyProfile:
+    """The audited company itself, INFERRED from this estate's own data —
+    the schema has no dedicated 'company' table, and this must never come
+    from the ground truth file (which isn't reachable from src/ anyway).
+    See EstateDB.identificar_empresa() for the inference rule. `confianza_*`
+    is the fraction of the evidence base that supports each value, so a
+    caller can sanity-check before trusting it on a very sparse estate."""
+    rfc: str
+    clabe: str
+    confianza_rfc: float
+    confianza_clabe: float

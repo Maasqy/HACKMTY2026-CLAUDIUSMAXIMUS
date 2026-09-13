@@ -12,6 +12,7 @@ from .estate_access import EstateDB, EstateNotFoundError
 from .models import (
     BankTxn,
     ClabeOwner,
+    CompanyProfile,
     Contract,
     EfosRecord,
     Employee,
@@ -35,4 +36,5 @@ __all__ = [
     "EfosRecord",
     "VendorProfile",
     "ClabeOwner",
+    "CompanyProfile",
 ]

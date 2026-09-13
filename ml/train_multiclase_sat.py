@@ -2,13 +2,23 @@
 """
 ml/train_multiclase_sat.py — HACKMTY2026 Forensic Auditor track.
 
-Trains a pruned CART (DecisionTreeClassifier) to predict `situacion_sat` —
-the vendor's REAL SAT Articulo 69-B legal status (Definitivo / Presunto /
-Desvirtuado / Favorable / No listado) — instead of the planted-scheme binary
-label `es_fraude` that train_cart.py uses. This is a genuinely different
-target: it is not "is this vendor part of a fraud scheme I planted", it is
-"what does the real government classification of this RFC look like, given
-only its transactional behavior".
+SECONDARY model (see ml/train_scheme_type.py for the primary one). Trains a
+pruned CART (DecisionTreeClassifier) to predict `situacion_sat` — the
+vendor's REAL SAT Articulo 69-B legal status. It is NOT the judged task
+("what fraud scheme, if any, is this entity part of") and it never drives
+an accusation on its own: src/scoring/leads.py only ever gives a small,
+fixed score bonus for a 'definitivo' prediction (see ML_DEFINITIVO_BONUS
+there). Its value is a real pitch point — a vendor can be flagged as
+EFOS-shaped *before* the SAT ever publishes 'definitivo', which is exactly
+the pain point ("para cuando el SAT publica definitivo, la empresa ya
+dedujo") — but the pitch's actual detection engine is train_scheme_type.py.
+
+Only THREE classes can occur: 'definitivo', 'presunto', 'no_listado'.
+estate_schema.sql's efos_list.status is only 'definitivo' | 'presunto';
+'desvirtuado'/'favorable' vendors are real, cleared 69-B cases kept as decoy
+material in gt_NNNN.json's `decoys`, never written to efos_list, so they can
+never appear here. Trained on VENDOR rows only (situacion_sat is undefined
+for a client-only entity) — see load_xy's es_proveedor filter.
 
 IMPORTANT — feature leakage guard: `en_lista_69b` and `es_69b_definitivo`
 (in features_train.csv) are computed from the exact same efos_list lookup
@@ -23,8 +33,8 @@ if the 69-B status were unknown.
 Like build_features.py, this lives OUTSIDE src/ as part of the offline
 training flow. Split: by estate (seed), not row, same as train_cart.py.
 
-Outputs (in --out-dir, default ml/artifacts_multiclase/):
-  modelo_cart_multiclase.pkl        pickled (tree, feature_names, classes, ccp_alpha)
+Outputs (in --out-dir, default ml/artifacts_situacion_sat/):
+  modelo_cart_situacion_sat.pkl        pickled (tree, feature_names, classes, ccp_alpha)
   metrics_comparison.csv            accuracy + macro precision/recall/f1/roc_auc_ovr, 3 models
   classification_report.csv         per-class precision/recall/f1/support (CART)
   confusion_matrix_multiclase.png
@@ -46,6 +56,7 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+import sklearn
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -73,17 +84,30 @@ CATEGORICAL_COLS = ["categoria"]
 # Excluded because they are computed from the same efos_list lookup that
 # produces the label itself (es_69b_definitivo IS the 'definitivo' class).
 LEAKY_COLS = ["en_lista_69b", "es_69b_definitivo"]
-# es_fraude is a different label (planted-scheme membership), not a feature.
-OTHER_LABEL_COLS = ["es_fraude"]
+# es_fraude/scheme_type are a different label (planted-scheme membership),
+# not a feature of this model.
+OTHER_LABEL_COLS = ["es_fraude", "scheme_type"]
+# Constant (or client-only) columns once rows are filtered to es_proveedor==1
+# above — no information for this vendor-only target.
+STRUCTURAL_COLS = [
+    "es_proveedor", "es_cliente", "num_facturas_venta", "monto_total_venta",
+    "monto_promedio_venta", "pct_facturas_venta_sin_cobro", "dias_a_cierre_periodo_venta",
+]
 
 
 def load_xy(features_path: Path):
     df = pd.read_csv(features_path)
+    # situacion_sat is a VENDOR concept only (efos_list has no notion of a
+    # client) — build_features.py now emits one row per entity, vendor or
+    # client, so drop the client-only rows here rather than training this
+    # secondary model on thousands of rows that are trivially 'no_listado'
+    # by construction.
+    df = df[df["es_proveedor"] == 1].reset_index(drop=True)
     dias_median = float(df["dias_antiguedad_al_facturar"].median())
     df["dias_antiguedad_al_facturar"] = df["dias_antiguedad_al_facturar"].fillna(dias_median)
     categoria_values = sorted(df["categoria"].dropna().unique().tolist())
     df = pd.get_dummies(df, columns=CATEGORICAL_COLS, prefix="cat")
-    drop_cols = ID_COLS + [TARGET_COL] + LEAKY_COLS + OTHER_LABEL_COLS
+    drop_cols = ID_COLS + [TARGET_COL] + LEAKY_COLS + OTHER_LABEL_COLS + STRUCTURAL_COLS
     feature_cols = [c for c in df.columns if c not in drop_cols]
     # Preprocessing metadata needed to reproduce this exact feature vector at
     # inference time on a SINGLE new vendor (where get_dummies alone would
@@ -156,7 +180,7 @@ def evaluate(model, X_test, y_test, name: str, classes: list) -> dict:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--features", type=Path, default=HERE / "features_train.csv")
-    ap.add_argument("--out-dir", type=Path, default=HERE / "artifacts_multiclase")
+    ap.add_argument("--out-dir", type=Path, default=HERE / "artifacts_situacion_sat")
     ap.add_argument("--test-seeds-frac", type=float, default=0.25)
     ap.add_argument("--random-state", type=int, default=0)
     args = ap.parse_args()
@@ -189,11 +213,15 @@ def main():
         "dias_antiguedad_median": preprocess["dias_antiguedad_median"],
         "categoria_values": preprocess["categoria_values"],
         "target_col": TARGET_COL,
+        # Version con la que se serializo: sklearn no garantiza que un
+        # pickle cargue entre versiones distintas, y un fallo silencioso
+        # al deserializar seria un modelo equivocado, no un error.
+        "sklearn_version": sklearn.__version__,
         "leaky_cols_excluded": LEAKY_COLS,
     }
-    with open(args.out_dir / "modelo_cart_multiclase.pkl", "wb") as f:
+    with open(args.out_dir / "modelo_cart_situacion_sat.pkl", "wb") as f:
         pickle.dump(model_bundle, f)
-    print(f"  wrote {args.out_dir / 'modelo_cart_multiclase.pkl'}")
+    print(f"  wrote {args.out_dir / 'modelo_cart_situacion_sat.pkl'}")
 
     y_pred_cart = cart.predict(X_test)
     report = classification_report(y_test, y_pred_cart, output_dict=True, zero_division=0)

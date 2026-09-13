@@ -1,0 +1,4 @@
+modelo,accuracy,precision_macro,recall_macro,f1_macro,roc_auc_macro_ovr
+CART_podado,0.8531,0.6665,0.6776,0.6711,0.7581
+Bagging_RandomForest,0.9125,0.9038,0.6725,0.7482,0.9488
+Boosting_GradientBoosting,0.9137,0.8611,0.715,0.7723,0.9449

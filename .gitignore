@@ -7,8 +7,26 @@ out/
 eval/runs/*.json
 !eval/runs/.gitkeep
 
-# frontend (Vite + React) - scaffold in feat/frontend branch
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
+# Regenerable — build with scripts/rebuild_estates.sh (seed -> deterministic
+# .db + gt json). Committing these bloats the repo with data anyone can
+# reproduce from the generator; see scripts/rebuild_estates.sh.
+data/estates/*.db
+eval/answers/*.json
+!eval/answers/.gitkeep
+data/holdout_sealed/estates/*.db
+eval/holdout_sealed/answers/*.json
 
+# OS / editor cruft
+.DS_Store
+**/.DS_Store
+
+# Loose reference PDFs/photos dropped at repo root — not part of the
+# submission, don't belong in version control. Scoped to the root only
+# (leading slash) so a PDF that's actually part of docs/ isn't swept up.
+/*.pdf
+/PHOTO-*.jpg
+
+# Salidas locales de AMLSim (no son parte del proyecto)
+AMLSim/outputs/
+AMLSim/paramFiles/
+AMLSim/sample/outputs/

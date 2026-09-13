@@ -39,6 +39,7 @@ from typing import Optional
 from .models import (
     BankTxn,
     ClabeOwner,
+    CompanyProfile,
     Contract,
     EfosRecord,
     Employee,
@@ -389,6 +390,42 @@ class EstateDB:
             monto_total_facturado=round(sum(f.total for f in facturas), 2),
             facturas_sin_po_ni_contrato=sin_respaldo,
         )
+
+    def identificar_empresa(self) -> CompanyProfile:
+        """Infiere el RFC y la CLABE de la empresa auditada a partir de los
+        propios datos de esta estate — el schema no tiene una tabla
+        'company' dedicada, y esto NUNCA se lee del archivo de ground truth
+        (que ademas no expone estos campos a esta capa).
+
+        Heuristica: el RFC que aparece con mas frecuencia como
+        receiver_rfc entre todas las facturas es la empresa (sus
+        proveedores le facturan a ella, y eso domina el conteo frente a las
+        pocas facturas de ingreso que ella misma emite). La CLABE que
+        aparece con mas frecuencia como from_clabe entre todas las
+        transferencias salientes es su cuenta bancaria (paga a docenas de
+        proveedores distintos desde la misma cuenta, mientras que una CLABE
+        intermedia de un ciclo de lavado solo aparece una vez).
+
+        `confianza_rfc`/`confianza_clabe` es la fraccion de la evidencia
+        total que respalda cada valor — util para que quien llame decida
+        si confiar en la inferencia sobre una estate muy pequena o atipica."""
+        row = self._one(
+            "SELECT receiver_rfc, COUNT(*) AS n FROM invoices GROUP BY receiver_rfc ORDER BY n DESC LIMIT 1"
+        )
+        total_row = self._one("SELECT COUNT(*) AS n FROM invoices")
+        total_inv = total_row["n"] if total_row else 0
+        rfc = row["receiver_rfc"] if row else ""
+        conf_rfc = round((row["n"] / total_inv), 4) if row and total_inv else 0.0
+
+        row2 = self._one(
+            "SELECT from_clabe, COUNT(*) AS n FROM bank_txns GROUP BY from_clabe ORDER BY n DESC LIMIT 1"
+        )
+        total_row2 = self._one("SELECT COUNT(*) AS n FROM bank_txns")
+        total_txn = total_row2["n"] if total_row2 else 0
+        clabe = row2["from_clabe"] if row2 else ""
+        conf_clabe = round((row2["n"] / total_txn), 4) if row2 and total_txn else 0.0
+
+        return CompanyProfile(rfc=rfc, clabe=clabe, confianza_rfc=conf_rfc, confianza_clabe=conf_clabe)
 
     def existe_registro(self, source_table: str, record_id: str) -> bool:
         """Confirma si un record_id existe en una tabla dada de esta estate.

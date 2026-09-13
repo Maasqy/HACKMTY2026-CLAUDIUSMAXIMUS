@@ -21,32 +21,24 @@ import re
 import sys
 from pathlib import Path
 
-from src.detectors import run_all as run_detectors
-from src.forensic.company import CompanyDerivationConflict, derive_company
-from src.forensic.promoter import promote
-from src.forensic.validator import validate
-from src.metrics.events import EventEmitter, NullEmitter
-from src.metrics.run_metrics import RunMetrics
-from src.tools.estate_access import EstateDB, EstateNotFoundError
+from src.forensic.client import LLMClient
+from src.pipeline import ejecutar
+from src.tools import EstateDB
 
-
-def _seed_from_path(path: Path, fallback: int) -> int:
-    m = re.search(r"(\d+)", path.stem)
-    return int(m.group(1)) if m else fallback
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m src.run")
     ap.add_argument("--estate", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--company-rfc", type=str, default=None,
-                    help="RFC de la empresa auditada; si se omite, se deriva del estate.")
-    ap.add_argument("--events", type=Path, default=None,
-                    help="ruta del jsonl de eventos; default out/events_<seed>.jsonl")
-    ap.add_argument("--no-events", action="store_true",
-                    help="no emitir events.jsonl (util para tests o benchmarks)")
-    args = ap.parse_args(argv)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-leads", type=int, default=12,
+                    help="cuantos leads investigar (presupuesto de LLM)")
+    ap.add_argument("--sin-modelo", action="store_true",
+                    help="solo etapas deterministas, sin llamar al LLM")
+    ap.add_argument("--offline", action="store_true",
+                    help="replay desde el cache, sin red")
+    args = ap.parse_args()
 
     if not args.estate.exists():
         print(f"No existe el estate: {args.estate}", file=sys.stderr)
@@ -57,69 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     metrics = RunMetrics()
     metrics.start()
 
-    findings: list[dict] = []
-    leads_not_pursued: list[dict] = []
+    # detectores -> leads -> investigator -> validator -> challenger.
+    # Todo el orden vive en src/pipeline.py; aqui solo se parsean argumentos.
+    # --sin-modelo corre unicamente las etapas deterministas, util cuando
+    # Ollama no esta levantado.
+    client = None if args.sin_modelo else LLMClient(offline=args.offline)
+    with EstateDB(args.estate) as estate:
+        submission = ejecutar(estate, client, max_leads=args.max_leads)
 
-    if args.no_events:
-        emitter = NullEmitter()
-    else:
-        events_path = args.events or (args.out.parent / f"events_{seed:04d}.jsonl")
-        emitter = EventEmitter(events_path)
-
-    try:
-        with EstateDB(args.estate) as db, emitter:
-            emitter.emit("run_started", "", {"seed": seed, "estate": str(args.estate)})
-            try:
-                company = derive_company(db, rfc_override=args.company_rfc)
-            except CompanyDerivationConflict as e:
-                print(f"[company-derivation] FAIL: {e}", file=sys.stderr)
-                emitter.emit("run_finished", "", {"status": "company_conflict", "error": str(e)})
-                return 3
-            print(f"[company-derivation] {company.evidence}", file=sys.stderr)
-            emitter.emit("metrics", "", {"company_rfc": company.rfc, "company_clabe": company.clabe})
-
-            leads = run_detectors(db, company)
-            for lead in leads:
-                emitter.emit("lead_opened", lead.entity, {
-                    "signal": lead.signal,
-                    "detector": lead.detector_id,
-                    "monto_estimado": lead.monto_estimado,
-                    "reason": lead.reason,
-                })
-                result = promote(lead, db, company)
-                if result.candidate is None:
-                    leads_not_pursued.append(_lead_to_dict(lead, result.reason))
-                    emitter.emit("lead_closed", lead.entity, {
-                        "closed_by": "validator",
-                        "reason": result.reason,
-                    })
-                    continue
-                verdict = validate(result.candidate, db)
-                if verdict.aprobado:
-                    findings.append(result.candidate)
-                    emitter.emit("finding", lead.entity, result.candidate)
-                else:
-                    leads_not_pursued.append(_lead_to_dict(lead, verdict.motivo))
-                    emitter.emit("lead_closed", lead.entity, {
-                        "closed_by": "validator",
-                        "reason": verdict.motivo,
-                    })
-    except EstateNotFoundError as e:
-        print(f"[estate] {e}", file=sys.stderr)
-        return 2
-
-    metrics.stop()
-
-    findings.sort(key=_finding_sort_key)
-    leads_not_pursued.sort(key=_lead_sort_key)
-
-    metadata = metrics.as_dict()
-    submission = {
-        "seed": seed,
-        "findings": findings,
-        "leads_not_pursued": leads_not_pursued,
-        "run_metadata": metadata,
-    }
+    submission["seed"] = args.seed
+    submission["run_metadata"].setdefault("cost_by_role", {})
+    findings = submission["findings"]
+    leads_not_pursued = submission["leads_not_pursued"]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(submission, indent=2, ensure_ascii=True, sort_keys=False),
