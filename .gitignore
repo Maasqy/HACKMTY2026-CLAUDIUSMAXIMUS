@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .llm_cache/
 out/
+!frontend/public/out/
 eval/runs/*.json
 !eval/runs/.gitkeep
 

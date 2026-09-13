@@ -1,41 +1,40 @@
-// Diccionario de labels legibles y colores por scheme_type. Los hex deben
-// coincidir con frontend/tailwind.config.ts theme.colors.scheme.*.
+// Human-readable labels + colors per scheme_type. Hex values must stay
+// aligned with frontend/tailwind.config.ts theme.colors.scheme.*.
 
 import { SCHEME_TYPES, type SchemeType } from "@/types/submission";
 
 export interface SchemeLabel {
   label: string;
   short: string;
-  color: string; // hex, alineado con tailwind.config.ts colors.scheme.*
+  color: string;
 }
 
 export const SCHEME_LABELS: Record<SchemeType, SchemeLabel> = {
   phantom_vendor: {
-    label: "Proveedor fantasma",
-    short: "Fantasma",
-    color: "#6366F1",
+    label: "Phantom vendor",
+    short: "Phantom",
+    color: "#A44200",
   },
   kickback: {
-    label: "Retorno del proveedor (kickback)",
+    label: "Kickback (vendor → employee)",
     short: "Kickback",
-    color: "#E11D48",
+    color: "#DC2626",
   },
   round_tripping: {
-    label: "Circulo de fondos",
-    short: "Circulo",
-    color: "#0891B2",
+    label: "Round-tripping (funds cycle)",
+    short: "Round-trip",
+    color: "#D97706",
   },
   threshold_splitting: {
-    label: "Fraccionamiento de compras",
-    short: "Fraccionamiento",
-    color: "#EA580C",
+    label: "Threshold splitting",
+    short: "Splitting",
+    color: "#CA8A04",
   },
   revenue_inflation: {
-    label: "Ingreso ficticio",
-    short: "Ingreso",
-    color: "#059669",
+    label: "Revenue inflation",
+    short: "Revenue",
+    color: "#B45309",
   },
 };
 
-// Re-export para conveniencia de callers.
 export { SCHEME_TYPES };
