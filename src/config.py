@@ -22,6 +22,16 @@ MAX_NARRATIVE_WORDS = 150
 SCHEME_TYPES = ("phantom_vendor", "kickback", "round_tripping",
                 "threshold_splitting", "revenue_inflation")
 
+# Nombres de tabla validos para un exhibit. Enum cerrado por
+# docs/spec/submission_schema.json — deliberadamente en ingles, los mismos
+# nombres literales de las tablas SQL. Gemma, trabajando en espanol, un dia
+# citó "transferencias" en vez de "bank_txns": no invento el dato, tradujo
+# el nombre de la tabla, y el validador (correctamente) lo rechazo. Vive
+# aqui, un solo lugar, para que prompts.py pueda listarlo explicito en el
+# prompt y validator.py siga verificando contra el mismo enum.
+SOURCE_TABLES = ("ledger", "invoices", "bank_txns", "vendors", "efos_list",
+                 "purchase_orders", "contracts", "employees")
+
 # Tablas del estate que llevan monto, usadas para reconciliar.
 AMOUNT_TABLES = {"invoices": "total", "bank_txns": "amount",
                  "purchase_orders": "amount", "contracts": "value"}

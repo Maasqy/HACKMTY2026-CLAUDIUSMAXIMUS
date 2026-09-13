@@ -151,6 +151,34 @@ else
   malo "  un finding pase aqui y falle validate_format.py"
 fi
 
+echo "== 5c. source_table: enum centralizado y listado explicito en el prompt"
+# Regresion real: Gemma, trabajando en espanol, tradujo "bank_txns" como
+# "transferencias" al citar un exhibit — el validador (correctamente) lo
+# rechazo, pero el hallazgo se perdio. La causa era que el prompt solo
+# mostraba UN ejemplo de source_table ("invoices"), nunca el enum completo.
+# Este check exige que validator.py y prompts.py usen el MISMO objeto de
+# src/config.py (no una copia que se pueda desincronizar) y que el prompt
+# liste, literalmente, cada uno de los 8 nombres de tabla en ingles.
+python3 - <<'PY' >/tmp/_srctab.log 2>&1
+import sys; sys.path.insert(0, ".")
+from src.config import SOURCE_TABLES as cfg_tables
+from src.forensic.validator import SOURCE_TABLES as val_tables
+from src.forensic.prompts import system_with_tools
+
+assert val_tables is cfg_tables, "validator.py tiene su propia copia de SOURCE_TABLES"
+
+spec = [{"function": {"name": "foo", "parameters": {"properties": {}, "required": []},
+                       "description": "x"}}]
+prompt = system_with_tools(spec)
+faltan = [t for t in cfg_tables if t not in prompt]
+sys.exit(1 if faltan else 0)
+PY
+if [ $? = 0 ]; then
+  ok "source_table: un solo enum (src/config.py), listado explicito en el prompt"
+else
+  malo "source_table desincronizado o no listado en el prompt (ver /tmp/_srctab.log)"
+fi
+
 echo "== 6. validador oficial de los jueces"
 python3 validate_format.py --submission /tmp/_v.json --estate data/estates/estate_0001.db 2>&1 \
   | grep -q PASS && ok "submission conforme al formato" || malo "el submission no pasa validate_format.py"

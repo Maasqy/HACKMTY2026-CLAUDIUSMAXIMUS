@@ -296,3 +296,34 @@ cualquier modelo de chat, gemma3 incluido. El detalle esta en
 `src/forensic/prompts.py` y `src/forensic/investigator.py`; el paso 5a de
 `verificar_todo.sh` comprueba, con un servidor falso, que la llave `tools`
 nunca vuelve a viajar en el request.
+
+### Por que el modelo no escribe texto de comentario, solo JSON
+
+Es a proposito, no una falla. Cada llamada al investigador se hace con
+`LLMClient.chat(..., format="json")`, que le pide a Ollama forzar la
+salida a JSON valido (funciona con cualquier modelo, a diferencia de
+`tools=`), y el prompt del sistema lo pide explicito: "Responde SOLO con
+este objeto JSON, sin texto alrededor". Un parrafo de comentario junto al
+JSON es exactamente lo que rompe el parseo del siguiente turno, asi que
+si ves solo el objeto `{"es_fraude": ...}` o `{"tool": ...}` y nada de
+prosa alrededor, el modelo esta haciendo lo correcto. La narrativa legible
+del caso no sale de un comentario libre: es el campo `"narrative"` dentro
+de ese mismo JSON, y es lo que termina en el expediente.
+
+### Por que un exhibit se rechazaba con "source_table no esta en el enum oficial"
+
+Gemma trabaja en español, y en algún momento citó un exhibit con
+`"source_table": "transferencias"` en vez de `"bank_txns"` — no inventó el
+dato (el `record_id` era real), tradujo el *nombre de la tabla*. El
+validador lo rechazó correctamente (`bank_txns` es el único valor válido
+ahí), pero el hallazgo se perdía por una traducción, no por evidencia
+mala.
+
+El enum vive en un solo lugar, `SOURCE_TABLES` en `src/config.py`
+(`ledger`, `invoices`, `bank_txns`, `vendors`, `efos_list`,
+`purchase_orders`, `contracts`, `employees`), y ahora `validator.py` lo
+importa de ahí en vez de tener su propia copia, y el prompt del
+investigador (`src/forensic/prompts.py`) lo lista explícito, palabra por
+palabra, con la instrucción de no traducirlo. El paso 5c de
+`verificar_todo.sh` comprueba que ambos archivos usen el mismo objeto y
+que los 8 nombres aparezcan, literales, en el prompt.

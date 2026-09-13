@@ -28,7 +28,7 @@ the model's decoding to valid JSON so the reply is reliably parseable.
 
 from __future__ import annotations
 
-from src.config import MAX_NARRATIVE_WORDS, MIN_EXHIBITS, SCHEME_TYPES
+from src.config import MAX_NARRATIVE_WORDS, MIN_EXHIBITS, SCHEME_TYPES, SOURCE_TABLES
 
 CONCLUSION_KEY = "es_fraude"   # top-level key that marks a final answer
 TOOL_CALL_KEY = "tool"         # top-level key that marks a tool request
@@ -110,6 +110,10 @@ REGLAS DE LA SALIDA:
 - Nunca mezcles los dos objetos ni agregues texto fuera del JSON: cada respuesta tuya es
   UNA llamada a herramienta O UNA conclusion, nunca ambas ni ninguna.
 - Minimo {MIN_EXHIBITS} exhibits, todos con record_id leido de una herramienta.
+- "source_table" de cada exhibit DEBE ser exactamente uno de estos valores literales, en
+  ingles, SIN TRADUCIR: {list(SOURCE_TABLES)}. Son los nombres reales de las tablas SQL, no
+  una descripcion: "bank_txns" (no "transferencias"), "purchase_orders" (no "ordenes de
+  compra"), etc. Cualquier otro valor es rechazado por el validador.
 - peso_amount debe ser la suma de los montos de los exhibits que citas, no una estimacion.
 - Si la evidencia no alcanza, responde es_fraude=false con reason_if_not. Es una respuesta
   valida y preferible a acusar de mas: acusar a una entidad honesta cuesta mas que dejar

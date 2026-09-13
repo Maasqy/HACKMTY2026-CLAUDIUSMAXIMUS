@@ -36,10 +36,8 @@ from src.config import (
     MIN_EXHIBITS,
     PESO_TOLERANCE,
     SCHEME_TYPES,
+    SOURCE_TABLES,
 )
-
-SOURCE_TABLES = ("ledger", "invoices", "bank_txns", "vendors", "efos_list",
-                 "purchase_orders", "contracts", "employees")
 
 _ENTITY_RE = re.compile(r"^(RFC:[A-ZÑ&0-9]{12,13}|EMP:\d{4})$")
 
