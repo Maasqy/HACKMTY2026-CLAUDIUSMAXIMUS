@@ -27,3 +27,17 @@ AMOUNT_TABLES = {"invoices": "total", "bank_txns": "amount",
 # Limites del loop de investigacion.
 MAX_STEPS_PER_RUN = 60
 MAX_LLM_CALLS_PER_RUN = 120
+
+# --- LLM (etapa 3 investigator y etapa 5 challenger) -----------------------
+# El modelo corre local (Ollama) para que la corrida replique sin red, que es
+# requisito de la spec. Todo esto vive en codigo, no en un prompt.
+LLM_MODEL = "gemma3:4b"          # tag exacto de ollama; cambialo aqui, no en el prompt
+LLM_BASE_URL = "http://localhost:11434"
+LLM_SEED = 7                      # fijo: "same seed -> same case file"
+LLM_TIMEOUT_S = 120.0
+
+# Costo imputado por 1k tokens. Un modelo local no factura por token, pero la
+# spec pide un numero de MXN y "0.00 porque corre en nuestra laptop" no dice
+# nada sobre si el enfoque escala. Esta tarifa es la referencia de un modelo
+# hospedado de tamano equivalente, para que la cifra sea comparable.
+MXN_PER_1K_TOKENS = 0.004
