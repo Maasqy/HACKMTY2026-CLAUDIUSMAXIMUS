@@ -359,40 +359,67 @@ function buildMoneyTrailDiagramHtml(f: Finding, mono: string): string {
     return "Vendor";
   };
 
-  // Horizontal box-and-arrow layout — simpler than SVG, plays nice with html2canvas.
-  const nodeBoxes = nodeIds.map((id) => `
-    <td style="text-align:center; vertical-align:middle; padding:0 4mm; min-width:50mm;">
-      <div style="border:2px solid ${nodeColor(id)}; border-radius:4px; padding:3mm 4mm; background:#ffffff; display:inline-block;">
-        <div style="${mono} font-size:10pt; font-weight:700; color:#0a0a0a; white-space:nowrap;">${escapeHtml(id)}</div>
-        <div style="${mono} font-size:7pt; color:${nodeColor(id)}; letter-spacing:0.5pt; text-transform:uppercase; margin-top:1mm;">${nodeKind(id)}</div>
-      </div>
-    </td>
-  `).join(`<td style="text-align:center; vertical-align:middle; padding:0 2mm;"><div style="${mono} font-size:14pt; color:#A44200;">→</div></td>`);
+  // Container is 816px wide with 96px horizontal padding = 720px usable.
+  // Fit N boxes horizontally: each box gets equal share of (720 - arrow_gaps).
+  // With ≥3 nodes we shrink font/box size a bit so nothing overflows.
+  const arrowW = 40;               // px per arrow gap
+  const outerPad = 24;             // px inside the diagram card
+  const usableW = 720 - outerPad * 2;
+  const gaps = Math.max(0, nodeIds.length - 1);
+  const boxW = Math.max(140, Math.floor((usableW - gaps * arrowW) / Math.max(1, nodeIds.length)));
+  const fontEntity = nodeIds.length >= 4 ? 10 : 12;   // px
+  const fontKind = 8;
 
+  // Build children: [box][arrow][box][arrow][box] ...
+  const parts: string[] = [];
+  nodeIds.forEach((id, i) => {
+    if (i > 0) {
+      parts.push(`
+        <div style="width:${arrowW}px; flex:0 0 ${arrowW}px; display:flex; align-items:center; justify-content:center; ${mono} font-size:22px; font-weight:700; color:#A44200; line-height:1;">&rarr;</div>
+      `);
+    }
+    parts.push(`
+      <div style="width:${boxW}px; flex:0 0 ${boxW}px; box-sizing:border-box; border:2px solid ${nodeColor(id)}; border-radius:6px; padding:10px 8px; background:#ffffff; text-align:center;">
+        <div style="${mono} font-size:${fontEntity}px; font-weight:700; color:#0a0a0a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.25;">${escapeHtml(id)}</div>
+        <div style="${mono} font-size:${fontKind}px; color:${nodeColor(id)}; letter-spacing:0.6px; text-transform:uppercase; margin-top:4px; line-height:1.2;">${escapeHtml(nodeKind(id))}</div>
+      </div>
+    `);
+  });
+
+  // Edge summary with real exhibit ids per aggregated flow
   const edgeLabels = edges.map((e) => {
-    const label = e.count > 1 ? `${formatMxn(e.amount)} · ${e.count}× cycles` : `${formatMxn(e.amount)} · ${e.date}`;
+    const firstExhibit = steps.find((s) => s.from === e.from && s.to === e.to)?.exhibit_id ?? "—";
+    const label = e.count > 1
+      ? `${formatMxn(e.amount)} across ${e.count} transfers, first ${e.date}`
+      : `${formatMxn(e.amount)} on ${e.date}`;
     return `
-      <div style="${mono} font-size:8pt; padding:1.5mm 3mm; margin:0.5mm 0; border-left:3px solid #A44200; background:#fdf6f0;">
+      <div style="${mono} font-size:9px; padding:6px 10px; margin:3px 0; border-left:3px solid #A44200; background:#fdf6f0; line-height:1.5;">
         <b style="color:#A44200;">${escapeHtml(e.from)}</b>
-        <span style="color:#666;"> → </span>
+        <span style="color:#666; margin:0 4px;">&rarr;</span>
         <b style="color:#A44200;">${escapeHtml(e.to)}</b>
-        <span style="color:#0a0a0a; margin-left:6px;">${escapeHtml(label)}</span>
-        <span style="color:#999; margin-left:6px;">(exhibit ${escapeHtml(e.from === steps[0]?.from ? steps.find((s) => s.from === e.from && s.to === e.to)?.exhibit_id ?? "—" : "—")})</span>
+        <span style="color:#0a0a0a; margin-left:8px;">${escapeHtml(label)}</span>
+        <span style="color:#999; margin-left:8px;">(exhibit ${escapeHtml(firstExhibit)})</span>
       </div>
     `;
   }).join("");
 
+  // Legend at the bottom of the diagram
+  const legend = `
+    <div style="display:flex; gap:16px; justify-content:center; margin-top:12px; ${mono} font-size:8px; color:#666; letter-spacing:0.5px; text-transform:uppercase;">
+      <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; border:2px solid #3B82F6; border-radius:2px;"></span>Company under audit</span>
+      <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; border:2px solid #A44200; border-radius:2px;"></span>Counterparty</span>
+      <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; border:2px solid #F97316; border-radius:2px;"></span>Employee</span>
+      <span style="margin-left:auto;">${steps.length} txn &middot; ${edges.length} edges &middot; ${nodeIds.length} nodes</span>
+    </div>
+  `;
+
   return `
-    <div class="pdf-avoid-break" style="margin-bottom:3mm; padding:5mm 3mm; background:#ffffff; border:1px solid #ccc; border-radius:4px;">
-      <table style="margin:0 auto; border-collapse:collapse;">
-        <tr>${nodeBoxes}</tr>
-      </table>
-      <div style="margin-top:4mm;">
-        ${edgeLabels}
+    <div class="pdf-avoid-break" style="margin-bottom:12px; padding:${outerPad}px; background:#ffffff; border:1px solid #ccc; border-radius:6px; width:100%; box-sizing:border-box;">
+      <div style="display:flex; align-items:center; justify-content:center; width:100%; margin-bottom:12px;">
+        ${parts.join("")}
       </div>
-      <div style="${mono} font-size:7pt; color:#666; text-align:center; margin-top:2mm;">
-        ${steps.length} transactions · ${edges.length} unique flows · ${nodeIds.length} entities
-      </div>
+      <div>${edgeLabels}</div>
+      ${legend}
     </div>
   `;
 }
