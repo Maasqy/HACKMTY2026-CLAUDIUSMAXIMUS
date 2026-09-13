@@ -8,11 +8,37 @@ import { loadEvents } from "@/lib/loadEvents";
 import { MOCK_EVENTS } from "@/mocks/events.mock";
 import { SCHEME_LABELS } from "@/lib/schemeLabels";
 import { cn } from "@/lib/utils";
+import { downloadFindingPdf } from "@/lib/generatePdfReport";
 import type { Exhibit, Finding, LeadNotPursued } from "@/types/submission";
 import type { Event as ForensicEvent } from "@/types/events";
 import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw, Brain, Search, Wrench, FileText, AlertTriangle, CheckCircle2, XCircle, Printer, Upload as UploadIcon, Info } from "lucide-react";
 import Upload from "@/routes/Upload";
 import About from "@/routes/About";
+
+// Set a descriptive page title per route so browser tabs and pinned tabs
+// read as a professional product, not the Vite default.
+const ROUTE_TITLES: Record<string, string> = {
+  "/": "Overview · Fraud Forensics",
+  "/case": "Case File · Fraud Forensics",
+  "/live": "Live Investigation · Fraud Forensics",
+  "/leads": "Leads Log · Fraud Forensics",
+  "/metrics": "Metrics · Fraud Forensics",
+  "/upload": "Load Data · Fraud Forensics",
+  "/about": "How it works · Fraud Forensics",
+};
+function usePageTitle() {
+  const location = useLocation();
+  useEffect(() => {
+    const path = location.pathname;
+    if (ROUTE_TITLES[path]) {
+      document.title = ROUTE_TITLES[path];
+    } else if (path.startsWith("/case/")) {
+      document.title = "Finding detail · Fraud Forensics";
+    } else {
+      document.title = "Fraud Forensics · CLAUDIUS MAXIMUS";
+    }
+  }, [location.pathname]);
+}
 
 function MockBanner() {
   const { isMock, isLoading } = useSubmission();
@@ -238,6 +264,20 @@ function FindingDetail() {
   const caseNumber = `FF-${String(submission.seed).padStart(4, "0")}-${String(idx + 1).padStart(3, "0")}`;
   const issuedOn = new Date().toISOString().slice(0, 10);
   const companyRfc = "UDA230508OIG";
+  const [pdfState, setPdfState] = useState<"idle" | "generating" | "success" | "error">("idle");
+
+  async function handleDownloadPdf() {
+    setPdfState("generating");
+    try {
+      await downloadFindingPdf(f, submission, caseNumber, companyRfc);
+      setPdfState("success");
+      setTimeout(() => setPdfState("idle"), 3500);
+    } catch (err) {
+      console.error("PDF export failed:", err);
+      setPdfState("error");
+      setTimeout(() => setPdfState("idle"), 3500);
+    }
+  }
 
   return (
     <div className="p-8 space-y-5 animate-fade-in max-w-5xl print:max-w-full print:p-0">
@@ -263,10 +303,32 @@ function FindingDetail() {
         <div className="flex items-center justify-between print:hidden">
           <Link to="/case" className="mono text-[11px] text-muted-foreground hover:text-foreground">← Back to case file</Link>
           <button
-            onClick={() => window.print()}
-            className="mono text-[11px] uppercase tracking-wider px-3 py-1.5 rounded-md border border-primary bg-primary/10 text-primary hover:bg-primary/20 hover:border-primary flex items-center gap-1.5 cursor-pointer"
+            onClick={handleDownloadPdf}
+            disabled={pdfState === "generating"}
+            aria-label={`Download PDF report for case ${caseNumber}`}
+            className={cn(
+              "mono text-[11px] uppercase tracking-wider px-3 py-1.5 rounded-md border flex items-center gap-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              pdfState === "generating"
+                ? "border-primary/40 bg-primary/5 text-primary/70 cursor-wait"
+                : pdfState === "success"
+                ? "border-success bg-success/10 text-success"
+                : pdfState === "error"
+                ? "border-destructive bg-destructive/10 text-destructive"
+                : "border-primary bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer",
+            )}
           >
-            <Printer className="h-3 w-3" /> Download PDF Report
+            {pdfState === "success" ? (
+              <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+            ) : (
+              <Printer className={cn("h-3 w-3", pdfState === "generating" && "animate-pulse")} aria-hidden="true" />
+            )}
+            {pdfState === "generating"
+              ? "Generating PDF…"
+              : pdfState === "success"
+              ? `Downloaded ${caseNumber}.pdf`
+              : pdfState === "error"
+              ? "Export failed — retry"
+              : "Download PDF Report"}
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 print:hidden">
@@ -507,7 +569,11 @@ function MoneyTrailDiagram({ steps }: { steps: Finding["money_trail"] }) {
 
   return (
     <div className="rounded-md border border-border bg-background/40 overflow-hidden">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Money trail diagram">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="mt-title mt-desc">
+        <title id="mt-title">Money trail with {nodeIds.length} entities and {steps.length} transactions</title>
+        <desc id="mt-desc">
+          {edges.map((e) => `${e.from} sent ${formatMxn(e.amount)} to ${e.to} on ${e.dates[0]}`).join(". ")}
+        </desc>
         <defs>
           <marker id="arrowhead-mt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#A44200" />
@@ -924,12 +990,13 @@ function NotFound() {
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
+  usePageTitle();
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <MockBanner />
       <div className="flex-1 flex">
         <Sidebar />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto" role="main">{children}</main>
       </div>
     </div>
   );
