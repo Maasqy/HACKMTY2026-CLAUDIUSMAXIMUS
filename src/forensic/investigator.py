@@ -128,7 +128,7 @@ def investigar_lead(estate, lead, client: LLMClient, company=None,
             tool_calls_made += 1
             try:
                 result = dispatch(estate, name, args)
-                payload = json.dumps(result, ensure_ascii=False, default=str)[:6000]
+                payload = _serializar_resultado(result)
             except Exception as exc:  # herramienta inexistente o argumento invalido
                 payload = json.dumps({"error": f"{type(exc).__name__}: {exc}"},
                                      ensure_ascii=False)
@@ -140,6 +140,40 @@ def investigar_lead(estate, lead, client: LLMClient, company=None,
         reason_if_not=f"El investigador agoto {max_steps} pasos sin concluir.",
         tool_calls_made=tool_calls_made,
     )
+
+
+MAX_TOOL_PAYLOAD = 6000
+
+
+def _serializar_resultado(result) -> str:
+    """Serializa el resultado de una herramienta, recortando por ELEMENTOS
+    cuando es muy grande — nunca cortando el string a la mitad.
+
+    Recortar el JSON ya serializado (`json.dumps(...)[:6000]`) deja una
+    cadena sintacticamente rota que el modelo no puede leer, y el modelo no
+    tiene forma de saber que le llego basura: simplemente alucina sobre un
+    payload corrupto. Aqui se recortan filas y se le dice explicitamente
+    cuantas se omitieron, para que pueda pedir un filtro mas estrecho.
+    """
+    texto = json.dumps(result, ensure_ascii=False, default=str)
+    if len(texto) <= MAX_TOOL_PAYLOAD:
+        return texto
+
+    if isinstance(result, list) and result:
+        recorte = list(result)
+        while recorte and len(json.dumps(recorte, ensure_ascii=False, default=str)) > MAX_TOOL_PAYLOAD - 200:
+            recorte = recorte[:max(1, int(len(recorte) * 0.7))]
+            if len(recorte) == 1:
+                break
+        return json.dumps({
+            "resultados": recorte,
+            "_truncado": f"Se muestran {len(recorte)} de {len(result)} filas. "
+                         f"Filtra mas (por RFC, fecha o monto) para ver el resto.",
+        }, ensure_ascii=False, default=str)
+
+    return json.dumps({
+        "_truncado": "El resultado excede el tamano maximo; pide un subconjunto mas especifico."
+    }, ensure_ascii=False)
 
 
 def _parse_json(content: str) -> dict:
