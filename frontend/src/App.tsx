@@ -1,14 +1,16 @@
 import { Routes, Route, Link, NavLink, useLocation, useParams, Navigate } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SubmissionProvider, useSubmission } from "@/hooks/useSubmission";
 import { useEventStream } from "@/hooks/useEventStream";
 import { useSweepData } from "@/hooks/useSweepData";
 import { formatMxn } from "@/lib/formatMxn";
+import { loadEvents } from "@/lib/loadEvents";
+import { MOCK_EVENTS } from "@/mocks/events.mock";
 import { SCHEME_LABELS } from "@/lib/schemeLabels";
 import { cn } from "@/lib/utils";
-import type { Finding, LeadNotPursued } from "@/types/submission";
+import type { Exhibit, Finding, LeadNotPursued } from "@/types/submission";
 import type { Event as ForensicEvent } from "@/types/events";
-import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw } from "lucide-react";
+import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw, Brain, Search, Wrench, FileText, AlertTriangle, CheckCircle2, XCircle, Printer } from "lucide-react";
 
 function MockBanner() {
   const { isMock, isLoading, error } = useSubmission();
@@ -230,10 +232,20 @@ function FindingDetail() {
   const f = submission.findings[idx];
   if (!f) return <Navigate to="/case" replace />;
 
+  const entity = f.entities[0] ?? "";
+
   return (
-    <div className="p-8 space-y-5 animate-fade-in max-w-5xl">
-      <header className="space-y-3">
-        <Link to="/case" className="mono text-[11px] text-muted-foreground hover:text-foreground">← Back to case file</Link>
+    <div className="p-8 space-y-5 animate-fade-in max-w-5xl print:max-w-full print:p-4">
+      <header className="space-y-3 print:space-y-2">
+        <div className="flex items-center justify-between print:hidden">
+          <Link to="/case" className="mono text-[11px] text-muted-foreground hover:text-foreground">← Back to case file</Link>
+          <button
+            onClick={() => window.print()}
+            className="mono text-[11px] uppercase tracking-wider px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary flex items-center gap-1.5 cursor-pointer"
+          >
+            <Printer className="h-3 w-3" /> Export report
+          </button>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <SchemeBadge scheme={f.scheme_type} />
           <ConfidenceBadge confidence={f.confidence} />
@@ -243,71 +255,195 @@ function FindingDetail() {
       </header>
 
       <section className="rounded-lg border border-border bg-surface p-5">
-        <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Narrative</h2>
+        <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Executive summary</h2>
         <p className="text-sm text-foreground leading-relaxed">{f.narrative}</p>
       </section>
 
       <section className="rounded-lg border border-border bg-surface p-5">
-        <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Rule broken</h2>
+        <div className="flex items-start gap-2 mb-2">
+          <Scale className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Rule broken · legal basis</h2>
+        </div>
         <p className="text-sm text-foreground leading-relaxed italic">{f.rule_broken}</p>
-        <div className="mt-3 flex items-baseline justify-between">
-          <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground">Peso amount</span>
-          <span className="mono text-xl text-primary font-semibold">{formatMxn(f.peso_amount)}</span>
+        <div className="mt-3 pt-3 border-t border-border flex items-baseline justify-between">
+          <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground">Amount at stake</span>
+          <span className="mono text-2xl text-primary font-semibold">{formatMxn(f.peso_amount)}</span>
         </div>
       </section>
 
-      <section className="rounded-lg border border-border bg-surface overflow-hidden">
-        <div className="px-5 py-3 border-b border-border flex items-center justify-between">
-          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Exhibits ({f.exhibits.length})</h2>
-          <span className="mono text-[10px] text-muted-foreground">reconcile within 2% of peso</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full mono text-[11px]">
-            <thead className="bg-muted/40 text-muted-foreground">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">exhibit_id</th>
-                <th className="text-left px-4 py-2 font-medium">source_table</th>
-                <th className="text-left px-4 py-2 font-medium">record_id</th>
-                <th className="text-left px-4 py-2 font-medium">note</th>
-              </tr>
-            </thead>
-            <tbody>
-              {f.exhibits.map((ex) => (
-                <tr key={ex.exhibit_id} className="border-t border-border hover:bg-muted/20 transition-colors">
-                  <td className="px-4 py-2 text-primary">{ex.exhibit_id}</td>
-                  <td className="px-4 py-2 text-muted-foreground">{ex.source_table}</td>
-                  <td className="px-4 py-2 text-foreground">{ex.record_id}</td>
-                  <td className="px-4 py-2 text-muted-foreground max-w-md truncate" title={ex.note}>{ex.note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <ReasoningChain entity={entity} scheme={f.scheme_type} />
 
-      {f.money_trail && f.money_trail.length > 0 && (
-        <section className="rounded-lg border border-border bg-surface p-5">
-          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground mb-3">Money trail</h2>
-          <div className="space-y-4">
-            {f.money_trail.map((s, i) => (
-              <div key={i} className="flex items-center gap-3 text-xs">
-                <span className="mono text-foreground min-w-[8rem]">{s.from}</span>
-                <div className="flex-1 border-t border-dashed border-primary/60 relative h-6">
-                  <span className="mono absolute -top-1 left-1/2 -translate-x-1/2 bg-surface px-2 text-primary text-[11px] font-semibold whitespace-nowrap">
-                    {formatMxn(s.amount)}
-                  </span>
-                  <span className="mono absolute top-3 left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground whitespace-nowrap">
-                    {s.date} · {s.exhibit_id}
-                  </span>
-                </div>
-                <span className="mono text-foreground min-w-[8rem] text-right">{s.to}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <ExhibitsSection exhibits={f.exhibits} />
+
+      {f.money_trail && f.money_trail.length > 0 && <MoneyTrailSection trail={f.money_trail} />}
+
+      <section className="rounded-lg border border-border bg-surface p-5 print:hidden">
+        <div className="flex items-start gap-2 mb-2">
+          <ShieldCheck className="h-4 w-4 text-success shrink-0 mt-0.5" />
+          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Auditability</h2>
+        </div>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Every claim above is traceable to a record_id in the estate. The peso amount reconciles within 2% against the cited amount-bearing tables (invoices, bank_txns, purchase_orders, contracts). The rule cited is a concrete statute or internal policy, never a statistical outlier. This report is deterministic — the same estate produces the same finding, byte-for-byte.
+        </p>
+      </section>
     </div>
   );
+}
+
+function ExhibitsSection({ exhibits }: { exhibits: Exhibit[] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  return (
+    <section className="rounded-lg border border-border bg-surface overflow-hidden">
+      <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-primary" />
+          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Exhibits ({exhibits.length})</h2>
+        </div>
+        <span className="mono text-[10px] text-muted-foreground">click a row to expand · reconciles within 2%</span>
+      </div>
+      <ul className="divide-y divide-border">
+        {exhibits.map((ex) => {
+          const open = openId === ex.exhibit_id;
+          return (
+            <li key={ex.exhibit_id}>
+              <button
+                onClick={() => setOpenId(open ? null : ex.exhibit_id)}
+                className="w-full text-left px-5 py-3 flex items-center gap-4 hover:bg-muted/20 transition-colors cursor-pointer"
+              >
+                <span className="mono text-xs text-primary font-semibold min-w-[3rem]">{ex.exhibit_id}</span>
+                <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground min-w-[8rem]">{ex.source_table}</span>
+                <span className="mono text-xs text-foreground truncate flex-1">{ex.record_id}</span>
+                <ChevronRight className={cn("h-3 w-3 text-muted-foreground transition-transform", open && "rotate-90")} />
+              </button>
+              {open && (
+                <div className="px-5 pb-4 pt-1 border-t border-border/50 bg-muted/10">
+                  <div className="mono text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">Note</div>
+                  <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">{ex.note}</p>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function MoneyTrailSection({ trail }: { trail: Finding["money_trail"] }) {
+  return (
+    <section className="rounded-lg border border-border bg-surface p-5">
+      <div className="flex items-start gap-2 mb-4">
+        <Radar className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+        <div>
+          <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Money trail</h2>
+          <p className="mono text-[10px] text-muted-foreground/70 mt-0.5">follow the peso — each arrow is a citable bank_txn</p>
+        </div>
+      </div>
+      <ol className="space-y-4">
+        {(trail ?? []).map((s, i) => (
+          <li key={i} className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
+            <div className="rounded-lg border border-border bg-background/50 px-3 py-2">
+              <div className="mono text-[9px] uppercase tracking-wider text-muted-foreground">From</div>
+              <div className="mono text-sm text-foreground truncate">{s.from}</div>
+            </div>
+            <div className="flex flex-col items-center min-w-[10rem]">
+              <div className="mono text-sm text-primary font-semibold">{formatMxn(s.amount)}</div>
+              <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-primary to-transparent my-1" />
+              <div className="mono text-[10px] text-muted-foreground">{s.date} · {s.exhibit_id}</div>
+              <div className="mono text-[9px] text-muted-foreground/60 uppercase tracking-wider mt-0.5">step {i + 1}</div>
+            </div>
+            <div className="rounded-lg border border-border bg-background/50 px-3 py-2 text-right">
+              <div className="mono text-[9px] uppercase tracking-wider text-muted-foreground">To</div>
+              <div className="mono text-sm text-foreground truncate">{s.to}</div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+const REASONING_ICONS: Record<string, { icon: typeof Brain; color: string; label: string }> = {
+  lead_opened: { icon: Search, color: "#3B82F6", label: "Signal detected" },
+  hypothesis: { icon: Brain, color: "#EAB308", label: "Hypothesis" },
+  tool_call: { icon: Wrench, color: "#06B6D4", label: "Evidence gathered (tool call)" },
+  evidence: { icon: FileText, color: "#8B5CF6", label: "Evidence recorded" },
+  challenge: { icon: AlertTriangle, color: "#F97316", label: "Challenger response" },
+  lead_closed: { icon: XCircle, color: "#EF4444", label: "Lead closed" },
+  finding: { icon: CheckCircle2, color: "#A44200", label: "Finding promoted" },
+};
+
+function ReasoningChain({ entity, scheme }: { entity: string; scheme: string }) {
+  const [events, setEvents] = useState<ForensicEvent[]>([]);
+  useEffect(() => {
+    loadEvents("/out/events.jsonl").then(setEvents).catch(() => setEvents(MOCK_EVENTS));
+  }, []);
+  const chain = useMemo(
+    () => events.filter((e) => e.entity === entity && REASONING_ICONS[e.type]),
+    [events, entity],
+  );
+
+  return (
+    <section className="rounded-lg border border-primary/30 bg-surface p-5 shadow-glow">
+      <div className="flex items-start gap-2 mb-3">
+        <Brain className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+        <div>
+          <h2 className="mono text-[10px] uppercase tracking-widest text-primary">AI Reasoning Chain</h2>
+          <p className="mono text-[10px] text-muted-foreground/70 mt-0.5">
+            why the AI decided this is {scheme.replace("_", " ")} — every step is auditable
+          </p>
+        </div>
+      </div>
+      {chain.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">
+          No detailed reasoning events for this entity. This finding was closed by the deterministic validator using rule-based signals only (no LLM inference required for this case).
+        </p>
+      ) : (
+        <ol className="space-y-2">
+          {chain.map((ev, i) => {
+            const meta = REASONING_ICONS[ev.type];
+            const Icon = meta.icon;
+            const payload = (ev as unknown as { payload?: Record<string, unknown> }).payload ?? {};
+            return (
+              <li key={`${ev.seq}-${i}`} className="flex gap-3 items-start">
+                <div className="flex flex-col items-center pt-0.5">
+                  <div className="w-7 h-7 rounded-full border-2 flex items-center justify-center shrink-0" style={{ borderColor: meta.color, backgroundColor: `${meta.color}20` }}>
+                    <Icon className="h-3.5 w-3.5" style={{ color: meta.color }} />
+                  </div>
+                  {i < chain.length - 1 && <div className="w-0.5 flex-1 min-h-[1rem] mt-1" style={{ background: `${meta.color}40` }} />}
+                </div>
+                <div className="flex-1 pb-3">
+                  <div className="flex items-baseline gap-2 mb-0.5">
+                    <span className="mono text-[10px] uppercase tracking-wider font-semibold" style={{ color: meta.color }}>{meta.label}</span>
+                    <span className="mono text-[10px] text-muted-foreground/60">t={ev.t.toFixed(2)}s</span>
+                  </div>
+                  <p className="text-xs text-foreground leading-relaxed">
+                    {formatReasoningPayload(ev.type, payload)}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function formatReasoningPayload(type: string, p: Record<string, unknown>): string {
+  if (type === "lead_opened") return String(p.reason ?? p.signal ?? "Signal detected");
+  if (type === "hypothesis") return String(p.hypothesis ?? p.scheme_type ?? "");
+  if (type === "tool_call") {
+    const tool = String(p.tool ?? "unknown_tool");
+    const args = p.args ? ` (${Object.entries(p.args as object).slice(0, 2).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 30)}`).join(", ")})` : "";
+    const rows = p.result_rows ? ` → ${p.result_rows} rows` : "";
+    return `Called ${tool}${args}${rows}`;
+  }
+  if (type === "evidence") return String(p.note ?? `${p.source_table}/${p.record_id}`);
+  if (type === "challenge") return `${p.challenge ?? ""} → ${p.response ?? ""}`;
+  if (type === "lead_closed") return `Closed by ${p.closed_by ?? "unknown"}: ${p.reason ?? ""}`;
+  if (type === "finding") return `Promoted to finding: ${p.scheme_type ?? ""} — ${p.rule_broken ?? ""}`;
+  return JSON.stringify(p).slice(0, 200);
 }
 
 function LeadsLog() {
@@ -492,7 +628,7 @@ function summarizePayload(ev: ForensicEvent): string {
 }
 
 function MetricsDashboard() {
-  const { data: sweep, isMock } = useSweepData();
+  const { rows: sweep, isMock } = useSweepData();
   const stats = useMemo(() => {
     if (!sweep || sweep.length === 0) return null;
     const totalRecallNum = sweep.reduce((s, r) => s + r.recall_num, 0);

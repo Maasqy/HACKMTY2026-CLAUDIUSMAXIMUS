@@ -28,3 +28,12 @@
     scroll-behavior: auto !important;
   }
 }
+
+@media print {
+  html, body { background: white !important; color: black !important; }
+  aside, nav, .print\:hidden { display: none !important; }
+  main { overflow: visible !important; }
+  section { break-inside: avoid; page-break-inside: avoid; }
+  * { color: black !important; background: white !important; border-color: #999 !important; box-shadow: none !important; }
+  a { color: black !important; text-decoration: none !important; }
+}
