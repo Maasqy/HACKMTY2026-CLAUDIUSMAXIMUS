@@ -254,6 +254,32 @@ del que uno creia haber instalado, sin ningun error a la vista.
 Cambiar de modelo cambia los hallazgos, asi que el tag queda registrado en
 la corrida.
 
+### Por que la corrida se queda "callada" varios minutos
+
+Un modelo de 12B corriendo local puede tardar 10-40s por turno, y una
+entidad puede necesitar varios turnos (pide una herramienta, recibe el
+resultado, pide otra, concluye). Sin mas, la terminal se queda muda hasta
+el `findings=N` final — varios minutos de silencio identicos a un cuelgue.
+
+Por default, `python3 -m src.run` imprime el progreso a stderr en tiempo
+real, uno por lead y uno por turno del modelo:
+
+```
+[   0.1s] lead 1/4: RFC:QYQ230920LR0 (score 0.9999, kickback)
+[  18.4s]   lead 1/4: llamada #1 (18.3s): pide obtener_facturas({'rfc_emisor': 'QYQ230920LR0'})
+[  41.2s]   lead 1/4: llamada #2 (22.8s): concluye (es_fraude=True)
+```
+
+Mientras esas líneas sigan apareciendo (aunque tarden), el proceso esta
+vivo. Para confirmarlo desde otra terminal sin tocar la que esta corriendo:
+
+```bash
+ollama ps   # si muestra el modelo con % de GPU/CPU activo, sigue trabajando
+```
+
+`--silencioso` apaga esto (por ejemplo, para no ensuciar la salida en un
+script que solo quiere el JSON final).
+
 ### Por que el investigador no usa el `tools` nativo de Ollama
 
 Si cambias a otro modelo y de repente vuelves a ver `findings=0` con la

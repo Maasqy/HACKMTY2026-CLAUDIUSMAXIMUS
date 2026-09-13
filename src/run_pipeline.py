@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from src.config import LLM_BASE_URL, LLM_MODEL
@@ -48,10 +49,19 @@ def main() -> int:
     ap.add_argument("--sin-challenger", action="store_true")
     ap.add_argument("--modelo", default=LLM_MODEL, help=f"tag de ollama (default {LLM_MODEL})")
     ap.add_argument("--base-url", default=LLM_BASE_URL)
+    ap.add_argument("--silencioso", action="store_true",
+                    help="no imprimir progreso a stderr (un modelo local de 12B puede tardar "
+                        "10-40s por turno; sin esto, varios minutos de silencio son "
+                        "indistinguibles de un cuelgue)")
     args = ap.parse_args()
 
     if not args.estate.exists():
         raise SystemExit(f"No existe el estate: {args.estate}")
+
+    started = time.time()
+
+    def progreso(texto: str) -> None:
+        print(f"[{time.time() - started:6.1f}s] {texto}", file=sys.stderr, flush=True)
 
     client = None
     if not args.sin_modelo:
@@ -59,7 +69,8 @@ def main() -> int:
 
     with EstateDB(args.estate) as estate:
         submission = ejecutar(estate, client, max_leads=args.max_leads,
-                               usar_challenger=not args.sin_challenger)
+                               usar_challenger=not args.sin_challenger,
+                               on_progress=None if args.silencioso else progreso)
 
     submission["seed"] = args.seed
     args.out.parent.mkdir(parents=True, exist_ok=True)

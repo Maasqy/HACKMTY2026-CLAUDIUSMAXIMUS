@@ -4,49 +4,57 @@
     {
       "entity": "RFC:SVP200815KL9",
       "signal": "kickback, round_tripping",
-      "reason": "El modelo no estuvo disponible: Ollama respondio 400 en http://localhost:11434/api/chat: registry.ollama.ai/library/gemma3:12b does not support tools",
-      "tool_calls_made": [],
+      "reason": "El validador rechazo la acusacion: source_table 'transferencias' no esta en el enum oficial; source_table 'transferencias' no esta en el enum oficial",
+      "tool_calls_made": [
+        "buscar_empleados",
+        "obtener_ordenes_compra",
+        "obtener_transferencias",
+        "obtener_transferencias",
+        "obtener_proveedor",
+        "esta_en_lista_69b"
+      ],
       "closed_by": "validator"
     },
     {
       "entity": "EMP:0007",
       "signal": "kickback",
-      "reason": "El modelo no estuvo disponible: Ollama respondio 400 en http://localhost:11434/api/chat: registry.ollama.ai/library/gemma3:12b does not support tools",
+      "reason": "Fuera del presupuesto de investigacion (score 0.9966, por debajo de los 1 leads priorizados).",
       "tool_calls_made": [],
       "closed_by": "validator"
     },
     {
       "entity": "RFC:AAA120730823",
       "signal": "phantom_vendor",
-      "reason": "El modelo no estuvo disponible: Ollama respondio 400 en http://localhost:11434/api/chat: registry.ollama.ai/library/gemma3:12b does not support tools",
+      "reason": "Fuera del presupuesto de investigacion (score 0.9916, por debajo de los 1 leads priorizados).",
       "tool_calls_made": [],
       "closed_by": "validator"
     },
     {
       "entity": "RFC:PAP110603RE5",
       "signal": "senales genericas",
-      "reason": "El modelo no estuvo disponible: Ollama respondio 400 en http://localhost:11434/api/chat: registry.ollama.ai/library/gemma3:12b does not support tools",
+      "reason": "Fuera del presupuesto de investigacion (score 0.7000, por debajo de los 1 leads priorizados).",
       "tool_calls_made": [],
       "closed_by": "validator"
     }
   ],
   "run_metadata": {
-    "llm_calls": 0,
+    "llm_calls": 8,
     "mxn_cost": 0.0,
-    "wall_clock_seconds": 0.05,
+    "wall_clock_seconds": 0.01,
     "deterministic": true,
     "etapas_segundos": {
-      "deterministico_cart": 0.0026,
-      "investigador_llm": 0.0435
+      "deterministico_cart": 0.0044,
+      "investigador_llm": 0.003,
+      "validator": 0.0001
     },
     "embudo": {
       "leads_generados": 4,
-      "leads_investigados": 0,
-      "rechazados_por_validator": 0,
+      "leads_investigados": 1,
+      "rechazados_por_validator": 1,
       "descartados_por_challenger": 0,
       "findings_finales": 0
     },
-    "cache_hits": 0,
+    "cache_hits": 8,
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "cost_by_role": {}

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -25,6 +26,11 @@ def main() -> int:
                     help="solo etapas deterministas, sin llamar al LLM")
     ap.add_argument("--offline", action="store_true",
                     help="replay desde el cache, sin red")
+    ap.add_argument("--silencioso", action="store_true",
+                    help="no imprimir progreso a stderr mientras corre (por defecto SI se "
+                        "imprime: un modelo local de 12B puede tardar 10-40s por turno, y sin "
+                        "esto la terminal se queda muda por minutos — indistinguible de un "
+                        "cuelgue)")
     args = ap.parse_args()
 
     if not args.estate.exists():
@@ -32,13 +38,17 @@ def main() -> int:
 
     started = time.time()
 
+    def progreso(texto: str) -> None:
+        print(f"[{time.time() - started:6.1f}s] {texto}", file=sys.stderr, flush=True)
+
     # detectores -> leads -> investigator -> validator -> challenger.
     # Todo el orden vive en src/pipeline.py; aqui solo se parsean argumentos.
     # --sin-modelo corre unicamente las etapas deterministas, util cuando
     # Ollama no esta levantado.
     client = None if args.sin_modelo else LLMClient(offline=args.offline)
     with EstateDB(args.estate) as estate:
-        submission = ejecutar(estate, client, max_leads=args.max_leads)
+        submission = ejecutar(estate, client, max_leads=args.max_leads,
+                              on_progress=None if args.silencioso else progreso)
 
     submission["seed"] = args.seed
     submission["run_metadata"].setdefault("cost_by_role", {})
