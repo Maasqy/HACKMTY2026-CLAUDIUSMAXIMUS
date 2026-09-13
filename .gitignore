@@ -6,3 +6,9 @@ venv/
 out/
 eval/runs/*.json
 !eval/runs/.gitkeep
+
+# frontend (Vite + React) - scaffold in feat/frontend branch
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
