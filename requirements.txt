@@ -1,16 +1,23 @@
-# Dependencias de ejecucion del Forensic Auditor.
+# Dependencias del Forensic Auditor.
 #
 #   python3 -m venv .venv && source .venv/bin/activate
 #   pip install -r requirements.txt
 #
-# El modelo NO se instala por aqui: corre en Ollama, fuera de Python.
-# Ver scripts/setup_llm.sh.
+# El modelo de lenguaje NO se instala por aqui: corre en Ollama, fuera de
+# Python. Ver scripts/setup_llm.sh.
 
-# --- runtime del agente (etapas 1-6) ---
+# --- CORRER el agente (etapas 1-6) -----------------------------------------
+# Una sola dependencia. El CART vive en src/scoring/model/*.json y se evalua
+# con la libreria estandar, asi que el runtime NO necesita scikit-learn,
+# pandas ni numpy. Eso es deliberado: un pickle de sklearn solo carga de
+# forma confiable con la misma version que lo creo, y eso obligaba a que
+# cada maquina del equipo y la de los jueces tuvieran la version exacta.
 requests>=2.31            # unico cliente HTTP; habla con Ollama
-scikit-learn>=1.3         # carga los .pkl del CART en src/scoring/model/
-pandas>=2.0               # reconstruye el vector de features en inferencia
-numpy>=1.24               # dependencia de las dos anteriores
 
-# --- solo para reentrenar y graficar (ml/), no hace falta para correr ---
+# --- REENTRENAR y graficar (ml/) -------------------------------------------
+# Nada de esto se ejecuta durante la demo. Instalalo solo si vas a correr
+# ml/train_scheme_type.py o ml/build_features.py.
+scikit-learn>=1.3         # entrena los CART
+pandas>=2.0               # construye la tabla de features
+numpy>=1.24               # dependencia de las dos anteriores
 matplotlib>=3.7           # matrices de confusion y curvas ROC

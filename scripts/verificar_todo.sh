@@ -18,8 +18,13 @@ ok()   { printf '  \033[32mOK\033[0m    %s\n' "$1"; }
 malo() { printf '  \033[31mFALLA\033[0m %s\n' "$1"; FALLOS=$((FALLOS+1)); }
 
 echo "== 1. dependencias de Python"
-for m in requests sklearn pandas numpy; do
-  python3 -c "import $m" 2>/dev/null && ok "$m" || malo "$m  (pip install -r requirements.txt)"
+# El runtime solo necesita requests: el CART se evalua desde JSON con la
+# libreria estandar. sklearn/pandas/numpy son solo para reentrenar.
+python3 -c "import requests" 2>/dev/null && ok "requests (unica dependencia del runtime)" \
+  || malo "requests  (pip install -r requirements.txt)"
+for m in sklearn pandas numpy; do
+  python3 -c "import $m" 2>/dev/null && ok "$m (opcional, solo para reentrenar)" \
+    || printf '  ---   %s ausente (opcional: solo hace falta para ml/)\n' "$m"
 done
 
 echo "== 2. insumos del generador en su sitio"
@@ -28,16 +33,16 @@ for f in data/raw/Listado_completo_69-B.csv AMLSim/sample/20K_cycle200.tgz docs/
 done
 
 echo "== 3. modelos entrenados"
-for f in src/scoring/model/modelo_cart_scheme_type.pkl src/scoring/model/modelo_cart_situacion_sat.pkl; do
-  [ -f "$f" ] && ok "$(basename "$f")" || malo "$f (reentrena: python3 ml/train_scheme_type.py)"
+for f in src/scoring/model/modelo_cart_scheme_type.json src/scoring/model/modelo_cart_situacion_sat.json; do
+  [ -f "$f" ] && ok "$(basename "$f")" \
+    || malo "$f  (exporta con: python3 ml/export_model_json.py)"
 done
 python3 -c "
-import pickle, sklearn, sys
-b=pickle.load(open('src/scoring/model/modelo_cart_scheme_type.pkl','rb'))
-v=b.get('sklearn_version')
-sys.exit(0 if v==sklearn.__version__ else 1)
-" 2>/dev/null && ok "version de scikit-learn coincide con la del entrenamiento" \
-  || malo "scikit-learn distinto al del entrenamiento (las predicciones pueden diferir)"
+import sys; sys.path.insert(0,'.')
+from src.scoring.model import predict_scheme_type
+lab, proba = predict_scheme_type({'num_facturas': 5, 'categoria': 'Consultoria'})
+sys.exit(0 if lab and proba else 1)
+" 2>/dev/null && ok "el modelo carga y predice sin sklearn" || malo "el modelo no predice"
 
 echo "== 4. el generador corre"
 if python3 estate_gen/generate_estate.py --seed 1 >/dev/null 2>&1; then
