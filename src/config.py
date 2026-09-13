@@ -32,8 +32,34 @@ MAX_LLM_CALLS_PER_RUN = 120
 # emitidas por el vendor en el mismo mes calendario del bank_txn.
 RECONCILIATION_WINDOW_MONTHS = 1
 
-# Estatus de efos_list que la ley SAT considera acusable en si mismo.
+# Estados reales del listado 69-B publicado por el SAT.
+# 'definitivo'         -> acusable (efecto retroactivo por 69-B CFF)
+# 'presunto'           -> lead only, la presuncion admite prueba en contrario
+# 'desvirtuado'        -> jamas acusable, el SAT ya resolvio a favor
+# 'sentencia_favorable'-> jamas acusable, tribunal ya resolvio a favor
 EFOS_DEFINITIVO = "definitivo"
+EFOS_PRESUNTO = "presunto"
+EFOS_DESVIRTUADO = "desvirtuado"
+EFOS_SENTENCIA_FAVORABLE = "sentencia_favorable"
+EFOS_STATUSES = frozenset({
+    EFOS_DEFINITIVO, EFOS_PRESUNTO, EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE,
+})
+EFOS_EXONERADO = frozenset({EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE})
+
+# Compuerta de materialidad para ascender un match EFOS a finding.
+EFOS_MATERIALITY_MIN_FLAGS = 2
+
+# Un vendor "fresco" tiene registered_date a menos de esta ventana de la primera
+# factura emitida. Bandera de materialidad.
+VENDOR_FRESHNESS_DAYS = 90
+
+# Conceptos genericos usados como bandera de materialidad. Case-insensitive,
+# substring match sobre concepto_text.
+GENERIC_CONCEPT_PATTERNS = frozenset({
+    "diversos", "servicios varios", "asesoria general", "asesoría general",
+    "servicios profesionales", "consultoria general", "consultoría general",
+    "varios", "gastos generales", "servicios diversos",
+})
 
 # rule_broken con estas palabras se rechaza: describen un patron estadistico,
 # no una regla concreta. Los jueces exigen la regla, no la senal.

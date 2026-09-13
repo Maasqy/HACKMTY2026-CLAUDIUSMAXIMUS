@@ -63,17 +63,22 @@ COMPANY_CLABE = "999999999999999999"
 EFOS_DEF_PRE = "PRE010101AA1"
 EFOS_DEF_POST = "POS020202BB2"
 EFOS_PRESUNTO = "PRE030303CC3"
-NORMAL_VENDOR = "NRM040404DD4"
+EFOS_DESVIRTUADO = "DES040404DD4"
+EFOS_SENT_FAV = "SEN050505EE5"
+NORMAL_VENDOR = "NRM060606FF6"
 
 
 def _seed_estate(conn: sqlite3.Connection) -> None:
     conn.executemany(
-        "INSERT INTO vendors (rfc, legal_name, bank_clabe, category) VALUES (?,?,?,?)",
+        "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date) VALUES (?,?,?,?,?)",
         [
-            (EFOS_DEF_PRE, "Proveedor EFOS Pre S.A.", "000000000000000001", "Servicios"),
-            (EFOS_DEF_POST, "Proveedor EFOS Post S.A.", "000000000000000002", "Servicios"),
-            (EFOS_PRESUNTO, "Proveedor Presunto S.A.", "000000000000000003", "Servicios"),
-            (NORMAL_VENDOR, "Proveedor Normal S.A.", "000000000000000004", "Consultoria"),
+            # Fresco (< 90d de primera factura): flag de materialidad se dispara.
+            (EFOS_DEF_PRE, "Proveedor EFOS Pre S.A.", "000000000000000001", "Servicios", "2026-04-01"),
+            (EFOS_DEF_POST, "Proveedor EFOS Post S.A.", "000000000000000002", "Servicios", "2020-01-01"),
+            (EFOS_PRESUNTO, "Proveedor Presunto S.A.", "000000000000000003", "Servicios", "2020-01-01"),
+            (EFOS_DESVIRTUADO, "Proveedor Desvirtuado S.A.", "000000000000000005", "Servicios", "2020-01-01"),
+            (EFOS_SENT_FAV, "Proveedor Sentencia Favorable S.A.", "000000000000000006", "Servicios", "2020-01-01"),
+            (NORMAL_VENDOR, "Proveedor Normal S.A.", "000000000000000004", "Consultoria", "2020-01-01"),
         ],
     )
     conn.executemany(
@@ -82,6 +87,8 @@ def _seed_estate(conn: sqlite3.Connection) -> None:
             (EFOS_DEF_PRE, "Proveedor EFOS Pre S.A.", "definitivo", "2025-01-15"),
             (EFOS_DEF_POST, "Proveedor EFOS Post S.A.", "definitivo", "2026-12-31"),
             (EFOS_PRESUNTO, "Proveedor Presunto S.A.", "presunto", "2025-06-01"),
+            (EFOS_DESVIRTUADO, "Proveedor Desvirtuado S.A.", "desvirtuado", "2025-08-01"),
+            (EFOS_SENT_FAV, "Proveedor Sentencia Favorable S.A.", "sentencia_favorable", "2025-09-01"),
         ],
     )
     invoices = [
@@ -93,6 +100,8 @@ def _seed_estate(conn: sqlite3.Connection) -> None:
         ("INV-PRE-001", EFOS_DEF_PRE, COMPANY_RFC, "2026-04-10", 0, 0, 500000.00, "", "G03", "03", "PUE", "vigente"),
         ("INV-POST-001", EFOS_DEF_POST, COMPANY_RFC, "2026-01-10", 0, 0, 100000.00, "", "G03", "03", "PUE", "vigente"),
         ("INV-PSU-001", EFOS_PRESUNTO, COMPANY_RFC, "2026-05-10", 0, 0, 80000.00, "", "G03", "03", "PUE", "vigente"),
+        ("INV-DES-001", EFOS_DESVIRTUADO, COMPANY_RFC, "2026-05-10", 0, 0, 70000.00, "", "G03", "03", "PUE", "vigente"),
+        ("INV-SEN-001", EFOS_SENT_FAV, COMPANY_RFC, "2026-05-10", 0, 0, 65000.00, "", "G03", "03", "PUE", "vigente"),
         ("INV-EMI-001", COMPANY_RFC, NORMAL_VENDOR, "2026-06-15", 0, 0, 5000.00, "", "G03", "03", "PUE", "vigente"),
         ("INV-NRM-JUN", NORMAL_VENDOR, COMPANY_RFC, "2026-06-05", 0, 0, 20000.00, "", "G03", "03", "PUE", "vigente"),
     ]
@@ -106,6 +115,8 @@ def _seed_estate(conn: sqlite3.Connection) -> None:
     bank_txns = [
         ("BNK-PRE-001", "2026-04-15", COMPANY_CLABE, "000000000000000001", 500000.00, "Pago", "SPEI"),
         ("BNK-POST-001", "2026-01-15", COMPANY_CLABE, "000000000000000002", 100000.00, "Pago", "SPEI"),
+        ("BNK-DES-001", "2026-05-15", COMPANY_CLABE, "000000000000000005", 70000.00, "Pago", "SPEI"),
+        ("BNK-SEN-001", "2026-05-15", COMPANY_CLABE, "000000000000000006", 65000.00, "Pago", "SPEI"),
         ("BNK-NRM-JUN", "2026-06-08", COMPANY_CLABE, "000000000000000004", 20000.00, "Pago", "SPEI"),
         ("BNK-NRM-JUL", "2026-07-15", COMPANY_CLABE, "000000000000000004", 45000.00, "Pago", "SPEI"),
     ]
@@ -164,9 +175,10 @@ def test_efos_match_emits_one_lead_per_efos_with_invoices() -> None:
     with _estate() as db:
         leads = efos_match.find_leads(db, _company())
     entities = sorted(l.entity for l in leads)
-    assert entities == [
+    assert entities == sorted([
         f"RFC:{EFOS_DEF_POST}", f"RFC:{EFOS_DEF_PRE}", f"RFC:{EFOS_PRESUNTO}",
-    ]
+        f"RFC:{EFOS_DESVIRTUADO}", f"RFC:{EFOS_SENT_FAV}",
+    ])
 
 
 def test_payment_wo_invoice_flags_month_without_matching_invoice() -> None:
@@ -185,25 +197,72 @@ def test_promoter_rejects_efos_presunto() -> None:
     assert "presunto" in result.reason
 
 
-def test_promoter_rejects_efos_published_after_first_operation() -> None:
+def test_promoter_rejects_efos_desvirtuado_as_exonerado() -> None:
+    with _estate() as db:
+        lead = next(l for l in efos_match.find_leads(db, _company()) if l.entity == f"RFC:{EFOS_DESVIRTUADO}")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "exonerado" in result.reason or "desvirtuado" in result.reason
+
+
+def test_promoter_rejects_efos_sentencia_favorable_as_exonerado() -> None:
+    with _estate() as db:
+        lead = next(l for l in efos_match.find_leads(db, _company()) if l.entity == f"RFC:{EFOS_SENT_FAV}")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "exonerado" in result.reason or "sentencia_favorable" in result.reason
+
+
+def test_promoter_promotes_efos_definitivo_with_operations_after_publication() -> None:
+    """El caso normal: publicacion posterior a las facturas. Efecto retroactivo."""
     with _estate() as db:
         lead = next(l for l in efos_match.find_leads(db, _company()) if l.entity == f"RFC:{EFOS_DEF_POST}")
         result = promote(lead, db, _company())
-    assert result.candidate is None
-    assert "posterior" in result.reason
+    # POST fixture: pub=2026-12-31, first_op=2026-01-10. All ops pre publication.
+    # Vendor no tiene registered_date "fresco", pero sin contrato+sin PO ya son 2 flags.
+    assert result.candidate is not None
+    cand = result.candidate
+    assert cand["scheme_type"] == "phantom_vendor"
+    assert "retroactivo" in cand["narrative"].lower()
+    assert "69-B" in cand["rule_broken"]
+    with _estate() as db:
+        assert validate(cand, db).aprobado
 
 
-def test_promoter_promotes_efos_published_before_operation_and_validator_accepts() -> None:
+def test_promoter_promotes_efos_definitivo_with_materiality() -> None:
     with _estate() as db:
         lead = next(l for l in efos_match.find_leads(db, _company()) if l.entity == f"RFC:{EFOS_DEF_PRE}")
         result = promote(lead, db, _company())
         assert result.candidate is not None
         cand = result.candidate
-        assert cand["scheme_type"] == "phantom_vendor"
         assert cand["entities"] == [f"RFC:{EFOS_DEF_PRE}"]
         assert len(cand["exhibits"]) >= 3
         assert len(cand["money_trail"]) >= 1
         assert validate(cand, db).aprobado
+
+
+def test_promoter_rejects_efos_definitivo_with_insufficient_materiality() -> None:
+    """Un EFOS definitivo con contrato + PO + no fresco + concepto claro no
+    dispara flags suficientes: se queda como lead."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO contracts (contract_id, vendor_rfc, start_date, value, scope_text)"
+            " VALUES ('CTR-PRE', ?, '2025-11-01', 500000, 'contrato marco especifico')",
+            (EFOS_DEF_PRE,),
+        )
+        conn.execute(
+            "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, requester, approver, description)"
+            " VALUES ('PO-PRE', ?, '2026-04-05', 500000, 'req', 'apv', 'servicio concreto')",
+            (EFOS_DEF_PRE,),
+        )
+        # Reset registered_date lejos para quitar el flag de freshness.
+        conn.execute("UPDATE vendors SET registered_date='2020-01-01' WHERE rfc=?", (EFOS_DEF_PRE,))
+        conn.commit()
+        lead = next(l for l in efos_match.find_leads(db, _company()) if l.entity == f"RFC:{EFOS_DEF_PRE}")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "materialidad" in result.reason.lower()
 
 
 def test_promoter_refuses_non_efos_leads() -> None:

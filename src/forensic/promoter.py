@@ -1,25 +1,37 @@
-"""Promueve un lead a un finding candidato. Solo para el patron blindado.
+"""Promueve un lead a un finding candidato.
 
-Regla del baseline:
-  - Solo se asciende un lead cuyo detector es 'efos_match' y cuyo estatus 69-B
-    es 'definitivo'.
-  - La publicacion en efos_list debe ser estrictamente anterior a la fecha
-    minima de la operacion. Si es posterior, la empresa no podia saberlo y
-    el lead se queda como leads_not_pursued con esa razon exacta.
+Reglas del baseline zero-LLM:
 
-Money trail (spec del usuario):
-  - Agrupar bank_txns por par (from_clabe, to_clabe).
-  - Un step por par: amount = suma, fecha = la del movimiento con mayor
-    monto (desempate txn_id), exhibit_id = ese movimiento.
-  - Ordenar steps por fecha del primer movimiento del par.
+1. Cuatro estados reales del 69-B:
+   - definitivo         -> potencialmente acusable
+   - presunto           -> nunca finding; siempre lead
+   - desvirtuado        -> jamas acusable; el SAT ya resolvio a favor
+   - sentencia_favorable-> jamas acusable; tribunal ya resolvio a favor
+
+2. El efecto de 69-B es RETROACTIVO. La fecha de publicacion no es compuerta;
+   decide unicamente el matiz de la narrativa.
+
+3. Compuerta de materialidad: un match EFOS definitivo asciende a finding solo
+   si se cumplen al menos EFOS_MATERIALITY_MIN_FLAGS banderas.
+
+4. Money trail: pares (from_clabe, to_clabe) agrupados; un step por par.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Optional
 
-from src.config import EFOS_DEFINITIVO, PESO_TOLERANCE
+from src.config import (
+    EFOS_DEFINITIVO,
+    EFOS_EXONERADO,
+    EFOS_MATERIALITY_MIN_FLAGS,
+    EFOS_PRESUNTO,
+    GENERIC_CONCEPT_PATTERNS,
+    PESO_TOLERANCE,
+    VENDOR_FRESHNESS_DAYS,
+)
 from src.detectors.base import Lead
 from src.forensic.company import CompanyIdentity
 from src.tools.estate_access import EstateDB
@@ -36,69 +48,106 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
         return PromotionResult(None, "el baseline solo asciende leads de efos_match.")
 
     ctx = dict(lead.detector_context)
-    if ctx.get("efos_status") != EFOS_DEFINITIVO:
+    status = (ctx.get("efos_status") or "").lower()
+
+    if status in EFOS_EXONERADO:
         return PromotionResult(
             None,
-            f"estatus 69-B es {ctx.get('efos_status', '(vacio)')!r}, "
-            "no 'definitivo'; sin acusacion.",
+            f"el SAT resolvio a favor del contribuyente ({status}); el listado 69-B "
+            f"distingue sospechoso de exonerado y no se acusa a un exonerado.",
         )
+    if status == EFOS_PRESUNTO:
+        return PromotionResult(
+            None,
+            "presunto sin resolucion; la presuncion admite prueba en contrario. "
+            "Se mantiene como lead pero sin acusacion.",
+        )
+    if status != EFOS_DEFINITIVO:
+        return PromotionResult(None, f"estatus 69-B desconocido: {status!r}.")
 
     pub_date = ctx.get("publication_date") or ""
     if not pub_date:
         return PromotionResult(
-            None,
-            "efos_list no tiene publication_date; no se puede validar la temporalidad.",
+            None, "efos_list no tiene publication_date; no se puede citar el articulo.",
         )
 
     invoice_uuids = [rid for tbl, rid in lead.suggested_records if tbl == "invoices"]
     bank_ids = [rid for tbl, rid in lead.suggested_records if tbl == "bank_txns"]
-
     facturas = [f for f in (db.obtener_factura(u) for u in invoice_uuids) if f is not None]
     txns = [t for t in (db.obtener_transferencia(b) for b in bank_ids) if t is not None]
 
-    if not facturas and not txns:
+    if not facturas:
         return PromotionResult(
-            None, "el proveedor esta en efos_list pero sin operacion citable en el estate."
+            None, "el proveedor esta en 69-B definitivo pero sin factura citable."
         )
     if not txns:
         return PromotionResult(
             None,
-            "hay facturas del EFOS pero ningun bank_txn asociado; sin flujo bancario "
-            "no se puede reconciliar la acusacion.",
-        )
-
-    op_dates = sorted(d for d in ([f.issue_date for f in facturas] + [t.date for t in txns]) if d)
-    if not op_dates:
-        return PromotionResult(None, "ninguna operacion tiene fecha citable.")
-    earliest_op = op_dates[0]
-    if pub_date >= earliest_op:
-        return PromotionResult(
-            None,
-            f"publicacion 69-B ({pub_date}) es posterior o igual a la primera operacion "
-            f"({earliest_op}); la empresa no podia saber que era EFOS en ese momento.",
+            "hay facturas del EFOS definitivo pero ningun bank_txn asociado; sin flujo "
+            "bancario no se puede reconciliar el peso_amount.",
         )
 
     rfc = lead.entity.split(":", 1)[1]
     vendor = db.obtener_proveedor(rfc)
     legal_name = vendor.legal_name if vendor is not None else ctx.get("legal_name", rfc)
 
+    # Compuerta de materialidad
+    contracts = db.obtener_contratos(rfc_proveedor=rfc)
+    pos = db.obtener_ordenes_compra(rfc_proveedor=rfc)
+    flags: list[str] = []
+    if not contracts:
+        flags.append("no existe contrato registrado para el proveedor")
+    if not pos:
+        flags.append("no existe orden de compra registrada para el proveedor")
+
+    first_invoice = min(facturas, key=lambda f: f.issue_date)
+    if vendor is not None and vendor.registered_date and first_invoice.issue_date:
+        gap = _days_between(vendor.registered_date, first_invoice.issue_date)
+        if gap <= VENDOR_FRESHNESS_DAYS:
+            flags.append(
+                f"proveedor registrado el {vendor.registered_date}, a {gap} dias de la "
+                f"primera factura ({first_invoice.issue_date})"
+            )
+
+    generic_hit = next((f for f in facturas if _is_generic_concept(f.concepto_text)), None)
+    if generic_hit is not None:
+        flags.append(
+            f"factura {generic_hit.uuid} con concepto generico "
+            f"({generic_hit.concepto_text!r})"
+        )
+
+    if vendor is not None and vendor.bank_clabe:
+        mismatch = next((t for t in txns if t.to_clabe != vendor.bank_clabe), None)
+        if mismatch is not None:
+            flags.append(
+                f"pago {mismatch.txn_id} a CLABE distinta a la registrada en vendors"
+            )
+
+    if len(flags) < EFOS_MATERIALITY_MIN_FLAGS:
+        return PromotionResult(
+            None,
+            f"EFOS definitivo pero materialidad insuficiente: {len(flags)}/"
+            f"{EFOS_MATERIALITY_MIN_FLAGS} banderas "
+            f"({'; '.join(flags) or 'ninguna'}). El SAT admite acreditar materialidad; "
+            f"el lead se mantiene abierto.",
+        )
+
+    # Exhibits
     exhibits: list[dict] = []
     exhibit_id_by_record: dict[tuple[str, str], str] = {}
 
     def _add(source_table: str, record_id: str, note: str) -> str:
         eid = f"E{len(exhibits) + 1}"
         exhibits.append({
-            "exhibit_id": eid,
-            "source_table": source_table,
-            "record_id": record_id,
-            "note": note,
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
         })
         exhibit_id_by_record[(source_table, record_id)] = eid
         return eid
 
     _add(
         "efos_list", rfc,
-        f"Publicado en la lista 69-B con estatus {EFOS_DEFINITIVO} el {pub_date}.",
+        f"Publicado en la lista 69-B con estatus definitivo el {pub_date}.",
     )
     for f in sorted(facturas, key=lambda x: x.uuid):
         _add(
@@ -113,14 +162,14 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
     if vendor is not None:
         _add(
             "vendors", vendor.rfc,
-            f"Registro del proveedor {vendor.rfc} con CLABE "
-            f"{vendor.bank_clabe or 'sin registro'}.",
+            f"Registro del proveedor {vendor.rfc} (CLABE {vendor.bank_clabe or 'sin registro'}, "
+            f"alta {vendor.registered_date or 'sin fecha'}).",
         )
 
+    # Money trail
     pairs: dict[tuple[str, str], list] = {}
     for t in txns:
         pairs.setdefault((t.from_clabe, t.to_clabe), []).append(t)
-
     steps: list[dict] = []
     for (from_clabe, to_clabe), group in pairs.items():
         rep = sorted(group, key=lambda x: (-x.amount, x.txn_id))[0]
@@ -129,8 +178,7 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
         steps.append({
             "from": _clabe_to_entity(db, from_clabe, company),
             "to": _clabe_to_entity(db, to_clabe, company),
-            "amount": total,
-            "date": rep.date,
+            "amount": total, "date": rep.date,
             "exhibit_id": exhibit_id_by_record[("bank_txns", rep.txn_id)],
             "_first_date": first_date,
         })
@@ -138,25 +186,33 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
     for s in steps:
         s.pop("_first_date")
 
+    # Peso y confidence
     total_pagado = round(sum(t.amount for t in txns), 2)
-    total_facturado = round(sum(f.total for f in facturas), 2) if facturas else 0.0
-    delta = (
-        abs(total_pagado - total_facturado) / max(total_facturado, 1.0)
-        if total_facturado else 1.0
+    total_facturado = round(sum(f.total for f in facturas), 2)
+    delta = abs(total_pagado - total_facturado) / max(total_facturado, 1.0)
+    confidence = "proven" if delta <= PESO_TOLERANCE else "probable"
+
+    op_dates = sorted(d for d in ([f.issue_date for f in facturas] + [t.date for t in txns]) if d)
+    earliest_op = op_dates[0] if op_dates else ""
+    latest_op = op_dates[-1] if op_dates else ""
+    all_pre = bool(latest_op) and latest_op < pub_date
+    some_post = bool(latest_op) and latest_op >= pub_date
+
+    narrative = _narrative(
+        rfc=rfc, legal=legal_name, pub_date=pub_date,
+        num_facturas=len(facturas), num_txns=len(txns),
+        total_pagado=total_pagado, earliest_op=earliest_op,
+        all_pre=all_pre, some_post=some_post, materiality=flags,
     )
-    confidence = "proven" if (total_facturado > 0 and delta <= PESO_TOLERANCE) else "probable"
 
     candidate = {
         "scheme_type": "phantom_vendor",
         "entities": [f"RFC:{rfc}"],
-        "narrative": _narrative(
-            rfc=rfc, legal=legal_name, pub_date=pub_date,
-            num_facturas=len(facturas), num_txns=len(txns),
-            total_pagado=total_pagado, earliest_op=earliest_op,
-        ),
+        "narrative": narrative,
         "rule_broken": (
-            "SAT Articulo 69-B: operacion con contribuyente publicado en la lista "
-            "definitiva de EFOS antes de la fecha de la operacion."
+            "SAT Articulo 69-B CFF: operaciones amparadas por CFDI de contribuyente en "
+            "listado 69-B definitivo no producen ni produjeron efectos fiscales (efecto "
+            "retroactivo); materialidad no acreditada."
         ),
         "peso_amount": total_pagado,
         "exhibits": exhibits,
@@ -164,6 +220,22 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
         "confidence": confidence,
     }
     return PromotionResult(candidate, "ok")
+
+
+def _is_generic_concept(text: str) -> bool:
+    if not text:
+        return False
+    lc = text.lower()
+    return any(pat in lc for pat in GENERIC_CONCEPT_PATTERNS)
+
+
+def _days_between(a: str, b: str) -> int:
+    try:
+        da = date.fromisoformat(a[:10])
+        db_ = date.fromisoformat(b[:10])
+    except ValueError:
+        return 10_000
+    return abs((db_ - da).days)
 
 
 def _clabe_to_entity(db: EstateDB, clabe: str, company: CompanyIdentity) -> str:
@@ -180,13 +252,25 @@ def _clabe_to_entity(db: EstateDB, clabe: str, company: CompanyIdentity) -> str:
 def _narrative(
     *, rfc: str, legal: str, pub_date: str, num_facturas: int, num_txns: int,
     total_pagado: float, earliest_op: str,
+    all_pre: bool, some_post: bool, materiality: list[str],
 ) -> str:
+    materiality_frag = "; ".join(materiality[:2]) if materiality else "sin materialidad"
+    if some_post:
+        temporal = (
+            f"algunas operaciones son posteriores al listado del {pub_date}; el efecto "
+            f"del 69-B tambien alcanza retroactivamente a las anteriores"
+        )
+    elif all_pre:
+        temporal = (
+            f"todas las operaciones son anteriores al listado del {pub_date}; el "
+            f"articulo 69-B CFF establece que estas 'no producen ni produjeron efectos "
+            f"fiscales' (efecto retroactivo)"
+        )
+    else:
+        temporal = f"listado publicado el {pub_date}"
     return (
-        f"El proveedor {rfc} ({legal}) fue publicado por el SAT en la lista 69-B con "
-        f"estatus definitivo el {pub_date}. Con esa publicacion previa, la empresa "
-        f"realizo operaciones a partir del {earliest_op}: recibio {num_facturas} "
-        f"factura(s) y pago ${total_pagado:,.2f} MXN en {num_txns} transferencia(s). "
-        f"La ley obliga a la empresa a suspender toda operacion con un EFOS "
-        f"definitivo desde la fecha de publicacion, y el efecto fiscal de las "
-        f"facturas emitidas es nulo."
+        f"El proveedor {rfc} ({legal}) esta publicado por el SAT en la lista 69-B con "
+        f"estatus definitivo. La empresa recibio {num_facturas} factura(s) desde "
+        f"{earliest_op} y pago ${total_pagado:,.2f} MXN en {num_txns} transferencia(s); "
+        f"{temporal}. Materialidad no acreditada: {materiality_frag}."
     )
