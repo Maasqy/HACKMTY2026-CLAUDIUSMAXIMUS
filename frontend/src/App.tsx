@@ -1,4 +1,19 @@
 import { Routes, Route, Link, useLocation } from "react-router-dom";
+import { SubmissionProvider, useSubmission } from "@/hooks/useSubmission";
+
+function MockBanner() {
+  const { isMock, isLoading, error } = useSubmission();
+  if (isLoading || !isMock) return null;
+  const detail = error ? ` (${error.message})` : "";
+  return (
+    <div
+      role="status"
+      className="mono text-xs bg-warning/10 text-warning border-b border-warning/30 px-4 py-2 text-center"
+    >
+      Usando datos mock — pipeline no encontrado{detail}
+    </div>
+  );
+}
 
 function Home() {
   return (
@@ -18,7 +33,7 @@ function Home() {
           <NavCard to="/metrics" title="Metrics" description="Recall y falsas por seed" />
         </section>
         <footer className="pt-4 border-t border-border text-xs text-muted-foreground mono">
-          Scaffold Fase 0 completo. Fase 1 (types + mocks) pendiente.
+          Scaffold Fase 1 (types + mocks) completo. Vistas se implementan en Fase 2.
         </footer>
       </div>
     </main>
@@ -57,15 +72,18 @@ function Placeholder() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Home />} />
-      <Route path="/case" element={<Placeholder />} />
-      <Route path="/case/:findingIndex" element={<Placeholder />} />
-      <Route path="/live" element={<Placeholder />} />
-      <Route path="/leads" element={<Placeholder />} />
-      <Route path="/metrics" element={<Placeholder />} />
-      <Route path="/about" element={<Placeholder />} />
-      <Route path="*" element={<Placeholder />} />
-    </Routes>
+    <SubmissionProvider>
+      <MockBanner />
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/case" element={<Placeholder />} />
+        <Route path="/case/:findingIndex" element={<Placeholder />} />
+        <Route path="/live" element={<Placeholder />} />
+        <Route path="/leads" element={<Placeholder />} />
+        <Route path="/metrics" element={<Placeholder />} />
+        <Route path="/about" element={<Placeholder />} />
+        <Route path="*" element={<Placeholder />} />
+      </Routes>
+    </SubmissionProvider>
   );
 }
