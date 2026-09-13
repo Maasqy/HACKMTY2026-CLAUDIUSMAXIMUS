@@ -1,9 +1,9 @@
 {
-  "name": "claudius-maximus-frontend",
+  "name": "fraud-forensics-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Forensic Auditor UI - HackMTY 2026 Team CLAUDIUS MAXIMUS",
+  "description": "Fraud Forensics UI - HackMTY 2026 Team CLAUDIUS MAXIMUS",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
