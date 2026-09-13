@@ -24,6 +24,7 @@ from datetime import date
 from typing import Optional
 
 from src.config import (
+    APPROVAL_LIMIT_MXN,
     EFOS_DEFINITIVO,
     EFOS_EXONERADO,
     EFOS_MATERIALITY_MIN_FLAGS,
@@ -44,9 +45,25 @@ class PromotionResult:
 
 
 def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResult:
-    if lead.detector_id != "efos_match":
-        return PromotionResult(None, "el baseline solo asciende leads de efos_match.")
+    router = {
+        "efos_match": _promote_efos_match,
+        # threshold_splitting existe como promoter (ver
+        # _promote_threshold_splitting), pero sobre el sweep 1-50 subia falsas
+        # acusaciones de 0 a 33. El plan es explicito: un detector no entra si
+        # sube las falsas acusaciones. Queda como lead con la senal, no como
+        # finding. Se puede reactivar sumando materialidad al promoter.
+    }
+    fn = router.get(lead.detector_id)
+    if fn is None:
+        return PromotionResult(
+            None,
+            f"detector {lead.detector_id!r} produce lead con senal reproducible pero "
+            f"sin compuerta de materialidad; se mantiene abierto para revision manual.",
+        )
+    return fn(lead, db, company)
 
+
+def _promote_efos_match(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResult:
     ctx = dict(lead.detector_context)
     status = (ctx.get("efos_status") or "").lower()
 
@@ -218,6 +235,109 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
         "exhibits": exhibits,
         "money_trail": steps,
         "confidence": confidence,
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_threshold_splitting(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    po_ids = [rid for tbl, rid in lead.suggested_records if tbl == "purchase_orders"]
+    if len(po_ids) < 3:
+        return PromotionResult(
+            None,
+            f"solo {len(po_ids)} POs en el cluster; la senal requiere >=3 para "
+            f"llamar fraccionamiento sistematico.",
+        )
+
+    rfc = lead.entity.split(":", 1)[1]
+    vendor = db.obtener_proveedor(rfc)
+    legal_name = vendor.legal_name if vendor is not None else rfc
+
+    # POs completos.
+    pos = [p for p in (db._one(
+        "SELECT * FROM purchase_orders WHERE po_id = ?", (pid,)
+    ) for pid in po_ids) if p is not None]
+    if len(pos) < 3:
+        return PromotionResult(None, "no se pudieron cargar todas las POs.")
+    from src.tools.models import PurchaseOrder
+    pos = [PurchaseOrder(**dict(p)) for p in pos]
+
+    total = round(sum(p.amount for p in pos), 2)
+    same_approver = ctx.get("same_approver") == "true"
+    approver = ctx.get("approver", "")
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    for p in sorted(pos, key=lambda x: x.po_id):
+        note = (
+            f"PO {p.po_id} por ${p.amount:,.2f} MXN el {p.date}, "
+            f"aprobada por {p.approver or 'sin firma'}."
+        )
+        _add("purchase_orders", p.po_id, note)
+
+    # Facturas del vendor en la ventana de las POs.
+    invoice_uuids = [rid for tbl, rid in lead.suggested_records if tbl == "invoices"]
+    facturas = [f for f in (db.obtener_factura(u) for u in invoice_uuids) if f is not None]
+    for f in sorted(facturas, key=lambda x: x.uuid):
+        _add(
+            "invoices", f.uuid,
+            f"Factura de {rfc} a la empresa por ${f.total:,.2f} MXN el {f.issue_date}.",
+        )
+    if vendor is not None:
+        _add(
+            "vendors", vendor.rfc,
+            f"Registro del proveedor {vendor.rfc} (CLABE {vendor.bank_clabe or 'sin registro'}).",
+        )
+
+    # Money trail: una arista empresa -> vendor, monto = suma POs, fecha = ultima PO.
+    if vendor is not None and vendor.bank_clabe:
+        last_po = max(pos, key=lambda x: x.date)
+        steps = [{
+            "from": f"RFC:{company.rfc}",
+            "to": f"RFC:{rfc}",
+            "amount": total,
+            "date": last_po.date,
+            "exhibit_id": exhibit_id_by_record[("purchase_orders", last_po.po_id)],
+        }]
+    else:
+        steps = []
+
+    approver_frag = (
+        f", todas firmadas por {approver}" if same_approver and approver else ""
+    )
+    narrative = (
+        f"El proveedor {rfc} ({legal_name}) recibio {len(pos)} ordenes de compra "
+        f"entre {min(p.date for p in pos)} y {max(p.date for p in pos)}, cada una "
+        f"debajo de ${APPROVAL_LIMIT_MXN:,.2f} MXN, sumando ${total:,.2f} MXN"
+        f"{approver_frag}. El limite de autorizacion interno se elude al fraccionar "
+        f"lo que economicamente es una sola compra en pedazos independientes."
+    )
+
+    candidate = {
+        "scheme_type": "threshold_splitting",
+        "entities": [f"RFC:{rfc}"],
+        "narrative": narrative,
+        "rule_broken": (
+            f"Politica interna de autorizacion: toda compra superior a "
+            f"${APPROVAL_LIMIT_MXN:,.0f} MXN requiere segunda firma "
+            f"(umbral en src/config.py:APPROVAL_LIMIT_MXN)."
+        ),
+        "peso_amount": total,
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": "proven" if same_approver else "probable",
     }
     return PromotionResult(candidate, "ok")
 

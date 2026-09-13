@@ -10,7 +10,7 @@ from typing import Iterator
 
 import pytest
 
-from src.detectors import efos_match, payment_wo_inv, run_all
+from src.detectors import efos_match, payment_wo_inv, threshold_splitting, run_all
 from src.forensic.company import (
     CompanyDerivationConflict,
     CompanyIdentity,
@@ -357,6 +357,69 @@ def test_validator_rejects_unsupported_entity() -> None:
     with _estate() as db:
         v = validate(c, db)
     assert not v.aprobado and "EMP:9999" in v.motivo
+
+
+def test_threshold_splitting_positive_case() -> None:
+    """3+ POs bajo el limite, ventana <=15d, suma rebasa limite: lead."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO purchase_orders
+            (po_id, vendor_rfc, date, amount, requester, approver, description)
+            VALUES (?,?,?,?,?,?,?)""",
+            [
+                ("PO-SPL-1", NORMAL_VENDOR, "2026-08-01", 40000, "req", "aprovador-x", "servicios"),
+                ("PO-SPL-2", NORMAL_VENDOR, "2026-08-05", 45000, "req", "aprovador-x", "servicios"),
+                ("PO-SPL-3", NORMAL_VENDOR, "2026-08-10", 48000, "req", "aprovador-x", "servicios"),
+            ],
+        )
+        conn.commit()
+        leads = threshold_splitting.find_leads(db, _company())
+    entities = [l.entity for l in leads]
+    assert f"RFC:{NORMAL_VENDOR}" in entities
+    lead = next(l for l in leads if l.entity == f"RFC:{NORMAL_VENDOR}")
+    assert dict(lead.detector_context)["same_approver"] == "true"
+    assert dict(lead.detector_context)["num_pos"] == "3"
+
+
+def test_threshold_splitting_negative_case_below_min_pos() -> None:
+    """Solo 2 POs no dispara aunque suma rebase el limite."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO purchase_orders
+            (po_id, vendor_rfc, date, amount, requester, approver, description)
+            VALUES (?,?,?,?,?,?,?)""",
+            [
+                ("PO-DOS-1", NORMAL_VENDOR, "2026-08-01", 40000, "r", "a", ""),
+                ("PO-DOS-2", NORMAL_VENDOR, "2026-08-02", 40000, "r", "a", ""),
+            ],
+        )
+        conn.commit()
+        leads = threshold_splitting.find_leads(db, _company())
+    assert not any(l.entity == f"RFC:{NORMAL_VENDOR}" for l in leads)
+
+
+def test_threshold_splitting_stays_as_lead_not_finding() -> None:
+    """Por politica del plan: threshold_splitting sube falsas -> lead only."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            """INSERT INTO purchase_orders
+            (po_id, vendor_rfc, date, amount, requester, approver, description)
+            VALUES (?,?,?,?,?,?,?)""",
+            [
+                ("PO-LDN-1", NORMAL_VENDOR, "2026-08-01", 40000, "r", "a", ""),
+                ("PO-LDN-2", NORMAL_VENDOR, "2026-08-05", 45000, "r", "a", ""),
+                ("PO-LDN-3", NORMAL_VENDOR, "2026-08-10", 48000, "r", "a", ""),
+            ],
+        )
+        conn.commit()
+        leads = threshold_splitting.find_leads(db, _company())
+        lead = next(l for l in leads if l.entity == f"RFC:{NORMAL_VENDOR}")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "revision manual" in result.reason or "no tiene promoter" in result.reason
 
 
 def test_run_all_orders_leads_stably() -> None:

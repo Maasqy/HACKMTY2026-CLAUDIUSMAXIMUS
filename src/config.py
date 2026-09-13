@@ -32,6 +32,24 @@ MAX_LLM_CALLS_PER_RUN = 120
 # emitidas por el vendor en el mismo mes calendario del bank_txn.
 RECONCILIATION_WINDOW_MONTHS = 1
 
+# threshold_splitting: fraccionamiento de POs bajo el limite de autorizacion.
+SPLIT_WINDOW_DAYS = 15
+SPLIT_MIN_POS = 3
+
+# kickback: retorno del proveedor al empleado que autorizo.
+KICKBACK_WINDOW_DAYS = 30
+KICKBACK_MIN_PCT = 0.03
+KICKBACK_MAX_PCT = 0.30
+
+# round_tripping: ciclo en el grafo dirigido de bank_txns.
+ROUNDTRIP_MAX_HOPS = 4
+ROUNDTRIP_WINDOW_DAYS = 45
+ROUNDTRIP_AMOUNT_TOLERANCE = 0.15
+
+# revenue_inflation: facturas emitidas por la empresa sin cobro.
+REVENUE_SETTLE_DAYS = 90
+PERIOD_END_DAYS = 10
+
 # Estados reales del listado 69-B publicado por el SAT.
 # 'definitivo'         -> acusable (efecto retroactivo por 69-B CFF)
 # 'presunto'           -> lead only, la presuncion admite prueba en contrario
