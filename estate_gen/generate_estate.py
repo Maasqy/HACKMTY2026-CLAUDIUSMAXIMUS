@@ -24,8 +24,8 @@ This script lives in estate_gen/, outside src/ — the agent under investigation
 never imports anything from this file or its directory.
 
 Outputs:
-  data/estates/estate_NNNN.db   SQLite, schema = docs/spec/estate_schema.sql
-  eval/answers/gt_NNNN.json     ground truth, schema = docs/spec/ground_truth_schema.json
+  data/estates/estate_NNNN.db   SQLite, schema = student-materials/forensic-auditor/estate_schema.sql
+  eval/answers/gt_NNNN.json     ground truth, schema = student-materials/forensic-auditor/ground_truth_schema.json
 
 gt_NNNN.json is the answer key. Per the track rules it must never be read by
 the agent under investigation, its tools, or anything they import — only by
@@ -57,7 +57,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-DEFAULT_SAT_CSV = REPO_ROOT / "data" / "raw" / "Listado_completo_69-B.csv"
+DEFAULT_SAT_CSV = REPO_ROOT / "Listado_completo_69-B.csv"
 DEFAULT_AMLSIM_TGZ = REPO_ROOT / "AMLSim" / "sample" / "20K_cycle200.tgz"
 DEFAULT_DB_DIR = REPO_ROOT / "data" / "estates"
 DEFAULT_GT_DIR = REPO_ROOT / "eval" / "answers"
@@ -111,6 +111,12 @@ def rng_choice_weighted_date(rng, start: date, end: date) -> date:
 
 BAND_SERVICIO_RECURRENTE = (15000.0, 150000.0)
 BAND_REVENUE = (50000.0, 320000.0)
+# round_tripping's cycle amounts must land inside a band that overlaps every
+# other invoice type's amounts, or monto_promedio_factura becomes a perfect,
+# single-feature separator for this scheme on its own (see
+# cycle_pesos_in_range's docstring). Deliberately wide/overlapping with both
+# bands above, not a new disjoint magnitude.
+BAND_ROUND_TRIPPING = (20000.0, 200000.0)
 
 
 def draw_amount(rng: random.Random, aml: "AMLSimSeed", low: float, high: float,
@@ -311,12 +317,38 @@ class AMLSimSeed:
     def cycle_pesos(self, scale: float):
         return [round(v * scale, 2) for v in self.cycle_amounts]
 
+    def cycle_pesos_in_range(self, rng: random.Random, n: int, low: float, high: float) -> list[float]:
+        """`n` chained amounts, each close to the last (a small per-hop
+        decay/variation, like fees skimmed at each layering step), anchored
+        by a real AMLSim amount rescaled into [low, high] via
+        amounts_in_range — the SAME shared band and the SAME real-amount
+        pool every other invoice type draws from.
+
+        This replaces an earlier version that band-normalized
+        self.cycle_amounts directly: that list is only ever [334.92, 165.16,
+        18.23] (AMLSimSeed's cycle discovery isn't reseeded per estate — it
+        walks the same fixed sample every time), so an affine transform of
+        it produced the literal SAME three output pesos in every one of the
+        200 estates. monto_promedio_factura for round_tripping's one
+        invoice was then a constant, making it a perfect, zero-overlap
+        separator for this scheme in the ML model (see SOBRE_EL_MODELO.md).
+        Anchoring on an `amounts_in_range` draw instead makes this vary
+        per-estate like everything else, while keeping the 'amount roughly
+        conserved through the chain' pattern round_tripping is actually
+        about."""
+        anchor = self.amounts_in_range(rng, 1, low, high)[0]
+        out = [anchor]
+        for _ in range(n - 1):
+            anchor = round(anchor * rng.uniform(0.85, 1.05), 2)
+            out.append(anchor)
+        return out
+
 
 # --------------------------------------------------------------------------
 # Estate builder
 # --------------------------------------------------------------------------
 
-SCHEMA_SQL = (REPO_ROOT / "docs" / "spec" / "estate_schema.sql")
+SCHEMA_SQL = (REPO_ROOT / "student-materials" / "forensic-auditor" / "estate_schema.sql")
 
 
 class Estate:
@@ -563,19 +595,27 @@ def build_background(estate: Estate, sat_pool, aml: "AMLSimSeed"):
                                     inv["total"], f"Pago factura {inv['uuid'][:8]}")
 
     # Background revenue invoices to clients (so revenue_inflation has a
-    # normal baseline to stand out against).
-    for _ in range(25):
+    # normal baseline to stand out against). Each client gets a VARIABLE
+    # number of invoices (1-5) instead of always exactly one — otherwise
+    # "how many invoices does this client have" becomes a perfect,
+    # zero-overlap separator for revenue_inflation (which always plants
+    # 3-5) on its own, regardless of whether any of them went uncollected.
+    # ~14 clients * ~2.1 invoices average keeps roughly the same total
+    # invoice volume as the old fixed 25x1.
+    for _ in range(14):
         client_rfc = make_rfc(rng, persona_moral=True)
-        dt = estate.rand_date()
-        subtotal = draw_amount(rng, aml, *BAND_REVENUE)
-        inv = estate.add_invoice(estate.company_rfc, client_rfc, dt, subtotal,
-                                  "Venta de servicios", metodo_pago=rng.choice(METODO_PAGO))
-        estate.add_ledger_pair(dt, "4000", "Ingresos", inv["total"],
-                                f"Ingreso factura {inv['uuid'][:8]}", inv["uuid"],
-                                "CC-100 Ventas", rng.choice(COMPANY_APPROVERS), is_revenue=True)
-        pay_date = (date.fromisoformat(dt) + timedelta(days=rng.randint(1, 15))).isoformat()
-        estate.add_bank_txn(pay_date, client_rfc[:18].ljust(18, "0"), estate.company_clabe,
-                             inv["total"], f"Cobro factura {inv['uuid'][:8]}")
+        n_invoices = rng.randint(1, 5)
+        for _ in range(n_invoices):
+            dt = estate.rand_date()
+            subtotal = draw_amount(rng, aml, *BAND_REVENUE)
+            inv = estate.add_invoice(estate.company_rfc, client_rfc, dt, subtotal,
+                                      "Venta de servicios", metodo_pago=rng.choice(METODO_PAGO))
+            estate.add_ledger_pair(dt, "4000", "Ingresos", inv["total"],
+                                    f"Ingreso factura {inv['uuid'][:8]}", inv["uuid"],
+                                    "CC-100 Ventas", rng.choice(COMPANY_APPROVERS), is_revenue=True)
+            pay_date = (date.fromisoformat(dt) + timedelta(days=rng.randint(1, 15))).isoformat()
+            estate.add_bank_txn(pay_date, client_rfc[:18].ljust(18, "0"), estate.company_clabe,
+                                 inv["total"], f"Cobro factura {inv['uuid'][:8]}")
 
 
 def build_sat_status_population(estate: Estate, sat_pool, aml: "AMLSimSeed"):
@@ -735,9 +775,7 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
     if rng.random() < 0.25:
         estate.add_contract(loop_vendor["rfc"], loop_vendor_registered, rng.uniform(150000, 500000),
                              "Contrato de intermediacion comercial")
-    cycle_pesos = aml.cycle_pesos(scale=rng.uniform(2500, 4500))
-    if len(cycle_pesos) < 2:
-        cycle_pesos = [round(rng.uniform(300000, 900000), 2) for _ in range(3)]
+    cycle_pesos = aml.cycle_pesos_in_range(rng, 3, *BAND_ROUND_TRIPPING)
     start_dt = estate.rand_date()
     initiating_amount = cycle_pesos[0]
     inv = estate.add_invoice(loop_vendor["rfc"], estate.company_rfc, start_dt, initiating_amount,
@@ -1106,6 +1144,31 @@ def build_decoys(estate: Estate, sat_pool):
                                     "para compras menores de herramienta; el monto por orden esta muy por "
                                     "debajo de cualquier umbral de aprobacion y hay contrato vigente.",
                     "invoices": invs})
+
+    # 10. real 'definitivo' 69-B status, but the commercial relationship
+    # ended before this period — a second, genuinely honest 'definitivo'
+    # example. Without this, efos_list status == 'definitivo' is a perfect,
+    # zero-overlap stand-in for "this IS the phantom_vendor scheme" (the
+    # generator otherwise never writes 'definitivo' anywhere else), which
+    # made es_69b_definitivo a single-feature separator for phantom_vendor
+    # in the ML model (see SOBRE_EL_MODELO.md). This vendor has ZERO
+    # invoices/POs/payments in the audited period on purpose.
+    existing_rfcs_def = {v["rfc"] for v in estate.vendors} | {e["rfc"] for e in estate.efos_list}
+    definitivo_pool = [r for r in sat_pool if r["status_norm"] == "definitivo" and r["rfc"] not in existing_rfcs_def]
+    if definitivo_pool:
+        r = rng.choice(definitivo_pool)
+        old_registered = (estate._period_start - timedelta(days=rng.randint(400, 900))).isoformat()
+        v = estate.add_vendor(r["rfc"], r["legal_name"], old_registered, category=rng.choice(CATEGORIES))
+        estate.efos_list.append({"rfc": r["rfc"], "legal_name": r["legal_name"], "status": "definitivo",
+                                  "publication_date": (estate._period_start - timedelta(days=rng.randint(30, 200))).isoformat()})
+        decoys.append({
+            "entity": f"RFC:{v['rfc']}", "signal": "efos_definitivo_relacion_terminada",
+            "why_innocent": "Aparece como 'definitivo' en el listado 69-B, pero la relacion comercial "
+                            "con este proveedor termino antes del periodo auditado: no hay una sola "
+                            "factura, orden de compra ni pago en este periodo. El status real en "
+                            "efos_list no implica, por si solo, un esquema activo hoy.",
+            "invoices": [],
+        })
 
     return decoys
 
