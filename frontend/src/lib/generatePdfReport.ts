@@ -1,5 +1,6 @@
 import html2pdf from "html2pdf.js";
 import type { Finding, Submission } from "@/types/submission";
+import type { Event as ForensicEvent } from "@/types/events";
 import { formatMxn } from "@/lib/formatMxn";
 
 // One-click PDF export for a Finding. Builds a light-theme, print-friendly
@@ -16,6 +17,7 @@ export async function downloadFindingPdf(
   submission: Submission,
   caseNumber: string,
   companyRfc: string = "UDA230508OIG",
+  reasoningEvents: ForensicEvent[] = [],
 ): Promise<void> {
   // 8.5in @ 96dpi = 816px; use letter width in pixels so html2canvas sees
   // a well-defined viewport.
@@ -64,7 +66,7 @@ export async function downloadFindingPdf(
   container.style.padding = "40px 48px";
   container.style.boxSizing = "border-box";
   container.style.boxShadow = "0 20px 60px rgba(0,0,0,0.4)";
-  container.innerHTML = buildReportHtml(finding, submission, caseNumber, companyRfc);
+  container.innerHTML = buildReportHtml(finding, submission, caseNumber, companyRfc, reasoningEvents);
   overlay.appendChild(container);
   document.body.appendChild(overlay);
 
@@ -101,10 +103,12 @@ export async function downloadFindingPdf(
   }
 }
 
-function buildReportHtml(f: Finding, submission: Submission, caseNumber: string, companyRfc: string): string {
+function buildReportHtml(f: Finding, submission: Submission, caseNumber: string, companyRfc: string, events: ForensicEvent[]): string {
   const issuedOn = new Date().toISOString().slice(0, 10);
   const mono = "font-family: 'Fira Code', 'Courier New', monospace;";
   const border = "1px solid #333";
+  const reasoningSection = buildReasoningChainHtml(events, mono);
+  const trailDiagram = buildMoneyTrailDiagramHtml(f, mono);
 
   const exhibitRows = f.exhibits.map((ex) => `
     <tr>
@@ -189,6 +193,9 @@ function buildReportHtml(f: Finding, submission: Submission, caseNumber: string,
         <p style="font-size:9.5pt; line-height:1.5; margin:0; font-style:italic;">${escapeHtml(f.rule_broken)}</p>
       </section>
 
+      <!-- AI REASONING CHAIN -->
+      ${reasoningSection}
+
       <!-- EXHIBITS -->
       <section style="margin-bottom:5mm;">
         <h2 style="font-size:10pt; letter-spacing:1pt; text-transform:uppercase; color:#555; ${mono} margin:0 0 2mm 0;">Exhibits (${f.exhibits.length}) — every row is verifiable in the estate</h2>
@@ -208,6 +215,7 @@ function buildReportHtml(f: Finding, submission: Submission, caseNumber: string,
       <!-- MONEY TRAIL -->
       <section style="margin-bottom:5mm;">
         <h2 style="font-size:10pt; letter-spacing:1pt; text-transform:uppercase; color:#555; ${mono} margin:0 0 2mm 0;">Money trail — each step is a citable bank_txn</h2>
+        ${trailDiagram}
         ${trailSection}
       </section>
 
@@ -247,4 +255,144 @@ function escapeHtml(v: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Reasoning-chain step colors, mirrors the on-screen ReasoningChain component.
+const REASONING_META: Record<string, { color: string; label: string }> = {
+  lead_opened: { color: "#3B82F6", label: "Signal detected" },
+  hypothesis: { color: "#EAB308", label: "Hypothesis" },
+  tool_call: { color: "#06B6D4", label: "Tool call" },
+  evidence: { color: "#8B5CF6", label: "Evidence recorded" },
+  challenge: { color: "#F97316", label: "Challenger response" },
+  lead_closed: { color: "#EF4444", label: "Lead closed" },
+  finding: { color: "#A44200", label: "Finding promoted" },
+};
+
+function buildReasoningChainHtml(events: ForensicEvent[], mono: string): string {
+  const relevant = events.filter((e) => REASONING_META[e.type]);
+  if (relevant.length === 0) return "";
+
+  const steps = relevant.map((ev) => {
+    const meta = REASONING_META[ev.type];
+    const p = (ev as unknown as { payload?: Record<string, unknown> }).payload ?? {};
+    const line = formatPayload(ev.type, p);
+    return `
+      <div class="pdf-avoid-break" style="display:flex; gap:8px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #eee;">
+        <div style="width:4px; background:${meta.color}; border-radius:2px; flex-shrink:0;"></div>
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:1mm;">
+            <span style="${mono} font-size:7.5pt; font-weight:700; color:${meta.color}; letter-spacing:0.5pt; text-transform:uppercase;">${meta.label}</span>
+            <span style="${mono} font-size:7pt; color:#999;">t=${ev.t.toFixed(2)}s</span>
+          </div>
+          <div style="font-size:8.5pt; line-height:1.45; color:#0a0a0a;">${escapeHtml(line)}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <section style="margin-bottom:5mm;">
+      <h2 style="font-size:10pt; letter-spacing:1pt; text-transform:uppercase; color:#555; ${mono} margin:0 0 2mm 0;">
+        AI Reasoning Chain — Gemma 4 investigator ↔ challenger loop (${relevant.length} steps)
+      </h2>
+      <div style="border-left:2px solid #A44200; padding:3mm 4mm; background:#fafafa;">
+        ${steps}
+      </div>
+    </section>
+  `;
+}
+
+function formatPayload(type: string, p: Record<string, unknown>): string {
+  if (type === "lead_opened") return String(p.reason ?? p.signal ?? "Signal detected");
+  if (type === "hypothesis") return String(p.statement ?? p.hypothesis ?? p.scheme_type ?? "");
+  if (type === "tool_call") {
+    const tool = String(p.tool ?? "unknown_tool");
+    const args = p.args ? ` (${Object.entries(p.args as object).slice(0, 2).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 30)}`).join(", ")})` : "";
+    const summary = p.result_summary ? ` → ${p.result_summary}` : "";
+    return `Called ${tool}${args}${summary}`;
+  }
+  if (type === "evidence") return String(p.note ?? `${p.source_table}/${p.record_id}`);
+  if (type === "challenge") {
+    const objection = String(p.objection ?? p.challenge ?? "");
+    const resolved = p.resolved === true ? " · resolved" : p.resolved === false ? " · pending" : "";
+    return `${objection}${resolved}`;
+  }
+  if (type === "lead_closed") return `Closed by ${p.closed_by ?? "unknown"}: ${p.reason ?? ""}`;
+  if (type === "finding") return `Promoted to finding: ${p.scheme_type ?? ""}`;
+  return "";
+}
+
+function buildMoneyTrailDiagramHtml(f: Finding, mono: string): string {
+  const steps = f.money_trail ?? [];
+  if (steps.length === 0) return "";
+
+  // Deduplicate nodes in order of first appearance
+  const nodeIds: string[] = [];
+  const seen = new Set<string>();
+  for (const s of steps) {
+    if (!seen.has(s.from)) { seen.add(s.from); nodeIds.push(s.from); }
+    if (!seen.has(s.to)) { seen.add(s.to); nodeIds.push(s.to); }
+  }
+
+  // Aggregate edges (same as on-screen diagram)
+  const edgeMap = new Map<string, { from: string; to: string; amount: number; count: number; date: string }>();
+  for (const s of steps) {
+    const key = `${s.from}→${s.to}`;
+    const existing = edgeMap.get(key);
+    if (existing) {
+      existing.amount += s.amount;
+      existing.count += 1;
+    } else {
+      edgeMap.set(key, { from: s.from, to: s.to, amount: s.amount, count: 1, date: s.date });
+    }
+  }
+  const edges = Array.from(edgeMap.values());
+
+  const nodeColor = (id: string): string => {
+    if (id.startsWith("EMP:")) return "#F97316";
+    if (id === "RFC:UDA230508OIG") return "#3B82F6";
+    return "#A44200";
+  };
+  const nodeKind = (id: string): string => {
+    if (id.startsWith("EMP:")) return "Employee";
+    if (id === "RFC:UDA230508OIG") return "Company (subject)";
+    return "Vendor";
+  };
+
+  // Horizontal box-and-arrow layout — simpler than SVG, plays nice with html2canvas.
+  const nodeBoxes = nodeIds.map((id) => `
+    <td style="text-align:center; vertical-align:middle; padding:0 4mm; min-width:50mm;">
+      <div style="border:2px solid ${nodeColor(id)}; border-radius:4px; padding:3mm 4mm; background:#ffffff; display:inline-block;">
+        <div style="${mono} font-size:10pt; font-weight:700; color:#0a0a0a; white-space:nowrap;">${escapeHtml(id)}</div>
+        <div style="${mono} font-size:7pt; color:${nodeColor(id)}; letter-spacing:0.5pt; text-transform:uppercase; margin-top:1mm;">${nodeKind(id)}</div>
+      </div>
+    </td>
+  `).join(`<td style="text-align:center; vertical-align:middle; padding:0 2mm;"><div style="${mono} font-size:14pt; color:#A44200;">→</div></td>`);
+
+  const edgeLabels = edges.map((e) => {
+    const label = e.count > 1 ? `${formatMxn(e.amount)} · ${e.count}× cycles` : `${formatMxn(e.amount)} · ${e.date}`;
+    return `
+      <div style="${mono} font-size:8pt; padding:1.5mm 3mm; margin:0.5mm 0; border-left:3px solid #A44200; background:#fdf6f0;">
+        <b style="color:#A44200;">${escapeHtml(e.from)}</b>
+        <span style="color:#666;"> → </span>
+        <b style="color:#A44200;">${escapeHtml(e.to)}</b>
+        <span style="color:#0a0a0a; margin-left:6px;">${escapeHtml(label)}</span>
+        <span style="color:#999; margin-left:6px;">(exhibit ${escapeHtml(e.from === steps[0]?.from ? steps.find((s) => s.from === e.from && s.to === e.to)?.exhibit_id ?? "—" : "—")})</span>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="pdf-avoid-break" style="margin-bottom:3mm; padding:5mm 3mm; background:#ffffff; border:1px solid #ccc; border-radius:4px;">
+      <table style="margin:0 auto; border-collapse:collapse;">
+        <tr>${nodeBoxes}</tr>
+      </table>
+      <div style="margin-top:4mm;">
+        ${edgeLabels}
+      </div>
+      <div style="${mono} font-size:7pt; color:#666; text-align:center; margin-top:2mm;">
+        ${steps.length} transactions · ${edges.length} unique flows · ${nodeIds.length} entities
+      </div>
+    </div>
+  `;
 }

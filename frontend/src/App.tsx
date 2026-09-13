@@ -265,11 +265,19 @@ function FindingDetail() {
   const issuedOn = new Date().toISOString().slice(0, 10);
   const companyRfc = "UDA230508OIG";
   const [pdfState, setPdfState] = useState<"idle" | "generating" | "success" | "error">("idle");
+  const [events, setEvents] = useState<ForensicEvent[]>([]);
+  useEffect(() => {
+    loadEvents("/out/events.jsonl").then(setEvents).catch(() => setEvents(MOCK_EVENTS));
+  }, []);
+  const reasoningEvents = useMemo(() => {
+    const entitySet = new Set(f.entities);
+    return events.filter((e) => entitySet.has(e.entity));
+  }, [events, f.entities]);
 
   async function handleDownloadPdf() {
     setPdfState("generating");
     try {
-      await downloadFindingPdf(f, submission, caseNumber, companyRfc);
+      await downloadFindingPdf(f, submission, caseNumber, companyRfc, reasoningEvents);
       setPdfState("success");
       setTimeout(() => setPdfState("idle"), 3500);
     } catch (err) {
