@@ -17,7 +17,7 @@ requests>=2.31            # unico cliente HTTP; habla con Ollama
 # --- REENTRENAR y graficar (ml/) -------------------------------------------
 # Nada de esto se ejecuta durante la demo. Instalalo solo si vas a correr
 # ml/train_scheme_type.py o ml/build_features.py.
-scikit-learn>=1.3         # entrena los CART
+scikit-learn==1.8         # entrena los CART
 pandas>=2.0               # construye la tabla de features
 numpy>=1.24               # dependencia de las dos anteriores
 matplotlib>=3.7           # matrices de confusion y curvas ROC
