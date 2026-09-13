@@ -30,10 +30,23 @@
 }
 
 @media print {
+  @page { size: letter; margin: 12mm 14mm 16mm 14mm; }
   html, body { background: white !important; color: black !important; }
   aside, nav, .print\:hidden { display: none !important; }
   main { overflow: visible !important; }
   section { break-inside: avoid; page-break-inside: avoid; }
   * { color: black !important; background: white !important; border-color: #999 !important; box-shadow: none !important; }
   a { color: black !important; text-decoration: none !important; }
+  .print\:show { display: block !important; }
+  .print\:show-flex { display: flex !important; }
+  h1 { font-size: 18pt !important; }
+  h2 { font-size: 11pt !important; }
+  .mono { font-family: "Fira Code", monospace !important; }
+  .pdf-header { border-bottom: 2px solid #000 !important; padding-bottom: 4mm !important; margin-bottom: 4mm !important; }
+  .pdf-footer { border-top: 1px solid #999 !important; padding-top: 3mm !important; margin-top: 6mm !important; font-size: 8pt !important; }
+  .pdf-badge { border: 1px solid #000 !important; padding: 1mm 2mm !important; display: inline-block !important; font-weight: 600; }
+  ul, ol { break-inside: auto; }
+  li { break-inside: avoid; }
 }
+/* Hide print-only elements on screen */
+.print\:show, .print\:show-flex { display: none; }

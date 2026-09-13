@@ -4,8 +4,9 @@
 // zero-LLM determinista.
 
 import type { Event } from "@/types/events";
+import { translateDeep } from "@/lib/translate";
 
-export const MOCK_EVENTS: Event[] = [
+const MOCK_EVENTS_RAW: Event[] = [
   { seq: 1, t: 0.0, type: "run_started", entity: "", payload: { seed: 42, estate: "data\\estates\\estate_0042.db" } },
   { seq: 2, t: 0.002, type: "metrics", entity: "", payload: { company_rfc: "UDA230508OIG", company_clabe: "819600133890838637" } },
   { seq: 3, t: 0.041, type: "lead_opened", entity: "RFC:CAS141022DQ4", payload: { signal: "efos_69b_match", detector: "efos_match", monto_estimado: 638407.26, reason: "El proveedor CAS141022DQ4 (CONSTRUCCIONES ASCAR, S.A. DE C.V.) aparece en la lista 69-B con estatus favorable publicado el 2026-01-10, y emitio 7 factura(s) a la empresa por un total de $638,407.26 MXN." } },
@@ -21,9 +22,20 @@ export const MOCK_EVENTS: Event[] = [
   { seq: 13, t: 0.042, type: "lead_opened", entity: "RFC:OEC1308301Z6", payload: { signal: "efos_69b_match", detector: "efos_match", monto_estimado: 174585.6, reason: "El proveedor OEC1308301Z6 (OPERADORA EMPRESARIAL CIEN DE MEXICO, S.A. DE C.V.) aparece en la lista 69-B con estatus desvirtuado publicado el 2026-10-30, y emitio 5 factura(s) a la empresa por un total de $174,585.60 MXN." } },
   { seq: 14, t: 0.042, type: "lead_closed", entity: "RFC:OEC1308301Z6", payload: { closed_by: "validator", reason: "el SAT resolvio a favor del contribuyente (desvirtuado); el listado 69-B distingue sospechoso de exonerado y no se acusa a un exonerado." } },
   { seq: 15, t: 0.042, type: "lead_opened", entity: "RFC:PMC151211248", payload: { signal: "efos_69b_match", detector: "efos_match", monto_estimado: 474723.78, reason: "El proveedor PMC151211248 (PETRO MAR DEL CARMEN, S.A. DE C.V.) aparece en la lista 69-B con estatus definitivo publicado el 2026-08-20, y emitio 7 factura(s) a la empresa por un total de $474,723.78 MXN." } },
+  { seq: 1501, t: 2.12, type: "hypothesis", entity: "RFC:PMC151211248", payload: { lead_entity: "RFC:PMC151211248", statement: "PMC151211248 is listed as definitive on the SAT 69-B roster since 2026-08-20. Under 69-B CFF the effect is retroactive: every CFDI from this taxpayer produces no fiscal effect. Hypothesis: this vendor issued fake invoices absorbed by the company with no underlying substance.", scheme_type: "phantom_vendor" } },
+  { seq: 1502, t: 3.44, type: "tool_call", entity: "RFC:PMC151211248", payload: { tool: "list_invoices_from_vendor", args: { rfc: "PMC151211248" }, result_summary: "7 invoices totaling $474,723.78 MXN between 2026-01-16 and 2026-08-11." } },
+  { seq: 1503, t: 4.01, type: "tool_call", entity: "RFC:PMC151211248", payload: { tool: "find_matching_contract", args: { vendor_rfc: "PMC151211248" }, result_summary: "No signed contract on file." } },
+  { seq: 1504, t: 4.28, type: "tool_call", entity: "RFC:PMC151211248", payload: { tool: "find_matching_purchase_order", args: { vendor_rfc: "PMC151211248" }, result_summary: "No purchase orders on file for the vendor." } },
+  { seq: 1505, t: 5.11, type: "evidence", entity: "RFC:PMC151211248", payload: { source_table: "efos_list", record_id: "PMC151211248", note: "Definitive 69-B listing dated 2026-08-20.", supports: "phantom_vendor" } },
+  { seq: 1506, t: 5.62, type: "evidence", entity: "RFC:PMC151211248", payload: { source_table: "invoices", record_id: "B40A9181-AC09-BDB7-9908-6E477249F62C", note: "Largest inbound invoice ($173,606.53 MXN) 2026-02-22.", supports: "phantom_vendor" } },
+  { seq: 1507, t: 6.90, type: "challenge", entity: "RFC:PMC151211248", payload: { target: "hypothesis:seq1501", objection: "Some invoices predate the 2026-08-20 listing. Does the retroactive effect actually reach them, or would this constitute retroactive punishment?", resolved: false } },
+  { seq: 1508, t: 8.71, type: "hypothesis", entity: "RFC:PMC151211248", payload: { lead_entity: "RFC:PMC151211248", statement: "Investigator response: Article 69-B CFF explicitly states 'no producen ni produjeron efectos fiscales' — no fiscal effects have been produced nor were produced. The past-tense construction is the SAT's own retroactive language; jurisprudence 2a./J. 78/2019 confirms retroactive reach for definitive listings.", scheme_type: "phantom_vendor" } },
+  { seq: 1509, t: 9.14, type: "challenge", entity: "RFC:PMC151211248", payload: { target: "hypothesis:seq1508", objection: "Accepted. Second objection: is materiality proven? Absence of PO/contract is suggestive but not dispositive.", resolved: false } },
+  { seq: 1510, t: 10.42, type: "evidence", entity: "RFC:PMC151211248", payload: { source_table: "vendors", record_id: "PMC151211248", note: "Vendor registered 2025-08-30, 4 months before first invoice; CLABE 871397187072867908 registered same day; no employees on file.", supports: "phantom_vendor" } },
+  { seq: 1511, t: 11.05, type: "challenge", entity: "RFC:PMC151211248", payload: { target: "hypothesis:seq1508", objection: "Materiality argument now sufficient: (a) 69-B definitive listing, (b) no contract, (c) no PO, (d) shell-like vendor registration timing. Approved to emit finding.", resolved: true } },
   {
     seq: 16,
-    t: 0.044,
+    t: 12.44,
     type: "finding",
     entity: "RFC:PMC151211248",
     payload: {
@@ -90,8 +102,144 @@ export const MOCK_EVENTS: Event[] = [
   { seq: 48, t: 0.045, type: "lead_closed", entity: "RFC:DBU170103PK0", payload: { closed_by: "validator", reason: "el detector 'payment_without_invoice' no tiene promoter en el baseline; queda como lead con la senal para revision manual." } },
   { seq: 49, t: 0.045, type: "lead_opened", entity: "RFC:ETI110706VU3", payload: { signal: "pago_sin_factura_mensual", detector: "payment_without_invoice", monto_estimado: 48504.56, reason: "En 2026-01 la empresa pago $48,504.56 MXN al proveedor ETI110706VU3 (Asesoria Fiscal Permanente SC) en 1 pago(s), pero la suma de facturas del mismo mes es $108,175.49 MXN — desviacion 55.2%, arriba del 2% permitido." } },
   { seq: 50, t: 0.045, type: "lead_closed", entity: "RFC:ETI110706VU3", payload: { closed_by: "validator", reason: "el detector 'payment_without_invoice' no tiene promoter en el baseline; queda como lead con la senal para revision manual." } },
-  // Fin del segmento de leads iniciales; cierro con los 3 eventos finales del run
-  // para que el timeline pueda completar el ciclo sin cortar la narrativa.
-  { seq: 1000000, t: 0.05, type: "metrics", entity: "", payload: { llm_calls: 0, mxn_cost: 0.0, wall_clock_seconds: 0.05, cost_by_role: {}, deterministic: true } },
-  { seq: 1000001, t: 0.05, type: "run_finished", entity: "", payload: { findings: 2, leads_not_pursued: 67 } },
+  // ---------- threshold_splitting flow (RFC:RUB160127EDA) ----------
+  { seq: 60000, t: 42.11, type: "lead_opened", entity: "RFC:RUB160127EDA", payload: { signal: "cluster_below_approval_limit", detector: "threshold_split", monto_estimado: 194736.25, reason: "Vendor RUB160127EDA received 4 POs between 2026-04-04 and 2026-04-14, each just below the $50,000 MXN second-signature threshold; combined value $194,736.25 MXN." } },
+  { seq: 60001, t: 43.02, type: "hypothesis", entity: "RFC:RUB160127EDA", payload: { lead_entity: "RFC:RUB160127EDA", statement: "Four POs in 10 days, each 96-99% of the $50k approval limit, all signed by Diana Patricia Longoria. Hypothesis: the buyer split what is economically a single purchase to evade the second-signature control.", scheme_type: "threshold_splitting" } },
+  { seq: 60002, t: 44.14, type: "tool_call", entity: "RFC:RUB160127EDA", payload: { tool: "list_pos_by_vendor_and_window", args: { rfc: "RUB160127EDA", start: "2026-04-01", end: "2026-04-30" }, result_summary: "4 POs: PO-00062 ($48,142.69), PO-00063 ($49,166.62), PO-00064 ($47,935.49), PO-00065 ($49,491.45)." } },
+  { seq: 60003, t: 44.82, type: "tool_call", entity: "RFC:RUB160127EDA", payload: { tool: "read_config_constant", args: { name: "APPROVAL_LIMIT_MXN" }, result_summary: "APPROVAL_LIMIT_MXN = 50000 defined in src/config.py." } },
+  { seq: 60004, t: 45.71, type: "evidence", entity: "RFC:RUB160127EDA", payload: { source_table: "purchase_orders", record_id: "PO-00062", note: "PO PO-00062 for $48,142.69 MXN on 2026-04-04, signed by Diana Patricia Longoria (single signature).", supports: "threshold_splitting" } },
+  { seq: 60005, t: 46.18, type: "challenge", entity: "RFC:RUB160127EDA", payload: { target: "hypothesis:seq60001", objection: "Could these be legitimately independent purchases for different projects?", resolved: false } },
+  { seq: 60006, t: 47.63, type: "tool_call", entity: "RFC:RUB160127EDA", payload: { tool: "list_invoices_from_vendor", args: { rfc: "RUB160127EDA" }, result_summary: "4 invoices matching each PO amount exactly, all for SKU-2039 'industrial fastener kit', same delivery address." } },
+  { seq: 60007, t: 48.29, type: "evidence", entity: "RFC:RUB160127EDA", payload: { source_table: "invoices", record_id: "0E5D8C6A-79DB-7862-8D7D-D772608E2F5C", note: "Invoice for $49,491.45 MXN on 2026-04-10, same SKU-2039, same delivery point.", supports: "threshold_splitting" } },
+  { seq: 60008, t: 49.02, type: "challenge", entity: "RFC:RUB160127EDA", payload: { target: "hypothesis:seq60001", objection: "Objection resolved: same SKU, same delivery point, same buyer, same vendor, 10-day window, all under the limit — economic substance is a single procurement.", resolved: true } },
+  {
+    seq: 60009,
+    t: 50.14,
+    type: "finding",
+    entity: "RFC:RUB160127EDA",
+    payload: {
+      scheme_type: "threshold_splitting",
+      entities: ["RFC:RUB160127EDA"],
+      narrative: "Vendor RUB160127EDA (Suministros Fraccionados del Valle SA de CV) received 4 purchase orders between 2026-04-04 and 2026-04-14, each below $50,000.00 MXN, totaling $194,736.25 MXN, all signed by Diana Patricia Longoria. The internal approval limit is evaded by splitting what is economically a single procurement into independent pieces.",
+      rule_broken: "Internal approval policy: every purchase above $50,000 MXN requires a second signature (threshold in src/config.py:APPROVAL_LIMIT_MXN).",
+      peso_amount: 194736.25,
+      exhibits: [
+        { exhibit_id: "E1", source_table: "purchase_orders", record_id: "PO-00062", note: "PO PO-00062 for $48,142.69 MXN on 2026-04-04, approved by Diana Patricia Longoria." },
+        { exhibit_id: "E2", source_table: "purchase_orders", record_id: "PO-00063", note: "PO PO-00063 for $49,166.62 MXN on 2026-04-07, approved by Diana Patricia Longoria." },
+        { exhibit_id: "E3", source_table: "purchase_orders", record_id: "PO-00064", note: "PO PO-00064 for $47,935.49 MXN on 2026-04-14, approved by Diana Patricia Longoria." },
+      ],
+      money_trail: [
+        { from: "RFC:UDA230508OIG", to: "RFC:RUB160127EDA", amount: 194736.25, date: "2026-04-14", exhibit_id: "E3" },
+      ],
+      confidence: "proven",
+    },
+  },
+
+  // ---------- kickback flow (RFC:GTI160203LM8 + EMP:0347) ----------
+  { seq: 70000, t: 78.43, type: "lead_opened", entity: "RFC:GTI160203LM8", payload: { signal: "vendor_markup_over_benchmark", detector: "kickback_markup", monto_estimado: 287450.00, reason: "Vendor GTI160203LM8 sold industrial supplies at 32.4% above catalog benchmark across 6 invoices between 2026-03-11 and 2026-06-24, totaling $287,450.00 MXN, all approved by procurement manager Roberto Cardenas Villarreal." } },
+  { seq: 70001, t: 79.12, type: "hypothesis", entity: "RFC:GTI160203LM8", payload: { lead_entity: "RFC:GTI160203LM8", statement: "Consistent 30%+ markup over catalog on identical SKUs, same approver, single-signature POs kept below the $60k limit. Hypothesis: kickback — vendor overcharges, employee approves, vendor kicks back a share to the employee.", scheme_type: "kickback" } },
+  { seq: 70002, t: 80.05, type: "tool_call", entity: "RFC:GTI160203LM8", payload: { tool: "compare_prices_vs_benchmark", args: { rfc: "GTI160203LM8", sku_family: "4471" }, result_summary: "Weighted avg markup 32.4% vs internal catalog median; 6 of 6 invoices priced above benchmark." } },
+  { seq: 70003, t: 81.34, type: "tool_call", entity: "RFC:GTI160203LM8", payload: { tool: "find_bank_transfers_from_vendor_to_employee", args: { vendor_rfc: "GTI160203LM8", employee_id: "EMP:0347", window_days: 10 }, result_summary: "Six credit transfers from GTI160203LM8's origin CLABE to Cardenas' personal CLABE within 3-5 business days of each corporate payment, totaling $71,862.50 MXN (exactly 25.0% of corporate outflow per event)." } },
+  { seq: 70004, t: 82.19, type: "evidence", entity: "RFC:GTI160203LM8", payload: { source_table: "bank_txns", record_id: "BNK-00513", note: "GTI160203LM8 CLABE credited Cardenas personal CLABE 002580700123456789 for $13,112.50 MXN on 2026-03-16, exactly 25.0% of the $52,450.00 MXN corporate payment on 2026-03-13.", supports: "kickback" } },
+  { seq: 70005, t: 83.02, type: "challenge", entity: "RFC:GTI160203LM8", payload: { target: "hypothesis:seq70001", objection: "Could the transfers to Cardenas' personal CLABE be legitimate reimbursements for expenses he covered on behalf of GTI160203LM8?", resolved: false } },
+  { seq: 70006, t: 84.28, type: "tool_call", entity: "RFC:GTI160203LM8", payload: { tool: "find_expense_reports_by_employee", args: { employee_id: "EMP:0347", window: "2026-03-01_2026-07-01" }, result_summary: "No expense reports filed by EMP:0347 in the window; no matching reimbursement approvals." } },
+  { seq: 70007, t: 85.14, type: "evidence", entity: "RFC:GTI160203LM8", payload: { source_table: "employees", record_id: "EMP:0347", note: "Employee record confirms Cardenas is Procurement Manager with sole approval authority up to $60k; no reimbursement claims filed in the window.", supports: "kickback" } },
+  { seq: 70008, t: 86.02, type: "challenge", entity: "RFC:GTI160203LM8", payload: { target: "hypothesis:seq70001", objection: "Resolved: no legitimate business explanation for the personal transfers. Approve finding.", resolved: true } },
+  {
+    seq: 70009,
+    t: 87.55,
+    type: "finding",
+    entity: "RFC:GTI160203LM8",
+    payload: {
+      scheme_type: "kickback",
+      entities: ["RFC:GTI160203LM8", "EMP:0347"],
+      narrative: "Employee Roberto Cardenas Villarreal (EMP:0347) approved 6 invoices from GTI160203LM8 at 32.4% above market; within 3-5 business days of each corporate payment, GTI160203LM8's CLABE credited Cardenas' personal CLABE for exactly 25% of the corporate amount, totaling $71,862.50 MXN in personal deposits against $287,450.00 MXN in corporate outflows.",
+      rule_broken: "Internal Code of Ethics Article 7 (conflict of interest); markup threshold src/config.py:KICKBACK_MARKUP_THRESHOLD_PCT = 20.",
+      peso_amount: 287450.00,
+      exhibits: [
+        { exhibit_id: "E1", source_table: "employees", record_id: "EMP:0347", note: "Employee record: Roberto Cardenas Villarreal, Procurement Manager." },
+        { exhibit_id: "E2", source_table: "vendors", record_id: "GTI160203LM8", note: "Vendor Grupo Tecnico Integral SA de CV." },
+        { exhibit_id: "E3", source_table: "bank_txns", record_id: "BNK-00513", note: "Return credit $13,112.50 MXN on 2026-03-16, 25.0% of prior corporate payment." },
+      ],
+      money_trail: [
+        { from: "RFC:UDA230508OIG", to: "RFC:GTI160203LM8", amount: 52450.00, date: "2026-03-13", exhibit_id: "E1" },
+        { from: "RFC:GTI160203LM8", to: "EMP:0347", amount: 13112.50, date: "2026-03-16", exhibit_id: "E3" },
+      ],
+      confidence: "proven",
+    },
+  },
+
+  // ---------- round_tripping flow (RFC:ATL180430MU7 <-> RFC:CFN191122VD1) ----------
+  { seq: 80000, t: 118.72, type: "lead_opened", entity: "RFC:ATL180430MU7", payload: { signal: "circular_cash_flow", detector: "round_trip", monto_estimado: 555000.00, reason: "Three identical $185,000 MXN transfers flow company → ATL180430MU7 → CFN191122VD1 → company within 7-day cycles, with zero net cash movement." } },
+  { seq: 80001, t: 119.51, type: "hypothesis", entity: "RFC:ATL180430MU7", payload: { lead_entity: "RFC:ATL180430MU7", statement: "Identical amounts, tight timing, two-hop loop terminating at origin, both counterparties registered in the same month with no employees. Hypothesis: revenue inflation through round-tripping — money is cycled to book fake revenue with no economic substance.", scheme_type: "round_tripping" } },
+  { seq: 80002, t: 120.44, type: "tool_call", entity: "RFC:ATL180430MU7", payload: { tool: "trace_cash_cycle", args: { seed_rfc: "UDA230508OIG", max_hops: 3, tolerance_days: 10 }, result_summary: "3 complete cycles found: 2026-05-08→05-15, 2026-05-29→06-05, 2026-06-19→06-22. Amount $185,000 MXN identical in all legs." } },
+  { seq: 80003, t: 121.17, type: "tool_call", entity: "RFC:ATL180430MU7", payload: { tool: "check_counterparty_substance", args: { rfcs: ["ATL180430MU7", "CFN191122VD1"] }, result_summary: "Both entities: registered 2025-11 (same month), no employees on file, no contracts on file, CLABEs registered same week as SAT registration." } },
+  { seq: 80004, t: 122.03, type: "evidence", entity: "RFC:ATL180430MU7", payload: { source_table: "bank_txns", record_id: "BNK-00701", note: "Outflow from company to ATL180430MU7 for $185,000 MXN on 2026-05-08.", supports: "round_tripping" } },
+  { seq: 80005, t: 122.61, type: "evidence", entity: "RFC:CFN191122VD1", payload: { source_table: "bank_txns", record_id: "BNK-00713", note: "Inflow from CFN191122VD1 to company for $185,000 MXN on 2026-05-15, closing the cycle.", supports: "round_tripping" } },
+  { seq: 80006, t: 123.44, type: "challenge", entity: "RFC:ATL180430MU7", payload: { target: "hypothesis:seq80001", objection: "Could ATL and CFN be legitimate boutique consultancies without registered employees (partners work as principals)?", resolved: false } },
+  { seq: 80007, t: 124.71, type: "tool_call", entity: "RFC:CFN191122VD1", payload: { tool: "find_engagement_deliverables", args: { vendor_rfc: "CFN191122VD1", client_rfc: "UDA230508OIG" }, result_summary: "No engagement letter, no scope, no deliverables, no interim reports on file for any of the 3 invoiced periods." } },
+  { seq: 80008, t: 125.32, type: "evidence", entity: "RFC:CFN191122VD1", payload: { source_table: "invoices", record_id: "INV-2026-3401", note: "Invoice from CFN191122VD1 for $185,000 MXN with generic 'Financial analysis engagement Q2' description, no engagement letter, three near-identical duplicates in 45 days.", supports: "round_tripping" } },
+  { seq: 80009, t: 126.11, type: "challenge", entity: "RFC:ATL180430MU7", payload: { target: "hypothesis:seq80001", objection: "Objection resolved: no work product supports the invoices; economic reality test fails NIF A-2.", resolved: true } },
+  {
+    seq: 80010,
+    t: 127.44,
+    type: "finding",
+    entity: "RFC:ATL180430MU7",
+    payload: {
+      scheme_type: "round_tripping",
+      entities: ["RFC:ATL180430MU7", "RFC:CFN191122VD1"],
+      narrative: "Between 2026-05-08 and 2026-06-22 the company cycled $555,000 MXN through ATL180430MU7 → CFN191122VD1 → back to the company in three identical $185,000 MXN loops with no economic substance, inflating gross revenue while netting zero cash movement.",
+      rule_broken: "NIF A-2 substance-over-form; NIF B-1 economic reality.",
+      peso_amount: 555000.00,
+      exhibits: [
+        { exhibit_id: "E1", source_table: "vendors", record_id: "ATL180430MU7", note: "Vendor Asesoria Tributaria Loyola SC, no employees, no contract." },
+        { exhibit_id: "E2", source_table: "vendors", record_id: "CFN191122VD1", note: "Vendor Consultoria Financiera Nogales SC, no employees, no contract." },
+        { exhibit_id: "E3", source_table: "bank_txns", record_id: "BNK-00701", note: "First outflow $185,000 MXN on 2026-05-08." },
+      ],
+      money_trail: [
+        { from: "RFC:UDA230508OIG", to: "RFC:ATL180430MU7", amount: 185000.00, date: "2026-05-08", exhibit_id: "E3" },
+        { from: "RFC:ATL180430MU7", to: "RFC:CFN191122VD1", amount: 185000.00, date: "2026-05-10", exhibit_id: "E3" },
+        { from: "RFC:CFN191122VD1", to: "RFC:UDA230508OIG", amount: 185000.00, date: "2026-05-15", exhibit_id: "E3" },
+      ],
+      confidence: "proven",
+    },
+  },
+
+  // ---------- revenue_inflation flow (RFC:MNI150618ZK4) ----------
+  { seq: 90000, t: 168.55, type: "lead_opened", entity: "RFC:MNI150618ZK4", payload: { signal: "year_end_invoice_no_payment", detector: "revenue_inflation", monto_estimado: 412780.00, reason: "Outbound invoice F-2026-0891 issued on 2026-12-30 for $412,780 MXN — no PO, no payment received 74 days later, counterparty registered with SAT 41 days before the invoice date." } },
+  { seq: 90001, t: 169.32, type: "hypothesis", entity: "RFC:MNI150618ZK4", payload: { lead_entity: "RFC:MNI150618ZK4", statement: "Large year-end invoice with no PO, no delivery record, no payment, brand-new counterparty. Hypothesis: revenue inflation — invoice booked to hit annual targets, expected to be reversed as bad debt in the next fiscal period.", scheme_type: "revenue_inflation" } },
+  { seq: 90002, t: 170.44, type: "tool_call", entity: "RFC:MNI150618ZK4", payload: { tool: "check_counterparty_history", args: { rfc: "MNI150618ZK4" }, result_summary: "SAT registration 2026-11-19, 41 days before F-2026-0891; no prior transactions with the company; no employees registered." } },
+  { seq: 90003, t: 171.09, type: "tool_call", entity: "RFC:MNI150618ZK4", payload: { tool: "find_matching_payment", args: { invoice_id: "F-2026-0891", window_days: 90 }, result_summary: "No inflow to the company's CLABE from MNI150618ZK4 in the 74 days from 2026-12-30 through 2027-03-14." } },
+  { seq: 90004, t: 171.88, type: "tool_call", entity: "RFC:MNI150618ZK4", payload: { tool: "find_purchase_order_from_customer", args: { customer_rfc: "MNI150618ZK4" }, result_summary: "No PO from MNI150618ZK4 exists." } },
+  { seq: 90005, t: 172.44, type: "evidence", entity: "RFC:MNI150618ZK4", payload: { source_table: "invoices", record_id: "F-2026-0891", note: "Outbound invoice $412,780 MXN issued 2026-12-30, concept 'Consulting + industrial minerals lot 4-A'.", supports: "revenue_inflation" } },
+  { seq: 90006, t: 173.16, type: "challenge", entity: "RFC:MNI150618ZK4", payload: { target: "hypothesis:seq90001", objection: "The invoice ticket is 12x the recent revenue baseline — could this be a legitimate large one-time deal that simply hasn't paid yet?", resolved: false } },
+  { seq: 90007, t: 174.02, type: "tool_call", entity: "RFC:MNI150618ZK4", payload: { tool: "find_delivery_records", args: { invoice_id: "F-2026-0891" }, result_summary: "No shipment record, no proof-of-delivery, no work-order in the fulfillment table." } },
+  { seq: 90008, t: 174.71, type: "evidence", entity: "RFC:MNI150618ZK4", payload: { source_table: "ledger", record_id: "GL-2026-4100-YE-INFL", note: "Revenue account 4100 credited $412,780 MXN on 2026-12-30; AR still open 74 days later.", supports: "revenue_inflation" } },
+  { seq: 90009, t: 175.44, type: "challenge", entity: "RFC:MNI150618ZK4", payload: { target: "hypothesis:seq90001", objection: "Objection resolved: absence of PO + no delivery + no payment + fresh SAT registration defeats the NIF C-11 probability test. Emit as PROBABLE (not proven — pending bad-debt reversal confirmation next period).", resolved: true } },
+  {
+    seq: 90010,
+    t: 176.72,
+    type: "finding",
+    entity: "RFC:MNI150618ZK4",
+    payload: {
+      scheme_type: "revenue_inflation",
+      entities: ["RFC:MNI150618ZK4"],
+      narrative: "The company issued invoice F-2026-0891 to MNI150618ZK4 on 2026-12-30 for $412,780 MXN, booking the amount as revenue in FY 2026. No PO, no delivery, no payment 74 days later; counterparty registered with SAT 41 days before the invoice.",
+      rule_broken: "NIF C-11 revenue recognition; IFRS 15 §31 (control transfer).",
+      peso_amount: 412780.00,
+      exhibits: [
+        { exhibit_id: "E1", source_table: "invoices", record_id: "F-2026-0891", note: "Invoice $412,780 MXN issued 2026-12-30." },
+        { exhibit_id: "E2", source_table: "vendors", record_id: "MNI150618ZK4", note: "Counterparty SAT registration 2026-11-19." },
+        { exhibit_id: "E3", source_table: "ledger", record_id: "GL-2026-4100-YE-INFL", note: "Revenue account credit 2026-12-30." },
+      ],
+      money_trail: [],
+      confidence: "probable",
+    },
+  },
+
+  // ---------- Run wrap-up ----------
+  { seq: 1000000, t: 218.4, type: "metrics", entity: "", payload: { llm_calls: 137, mxn_cost: 24.68, wall_clock_seconds: 218.4, cost_by_role: { investigator: 15.42, challenger: 6.91, validator: 2.35 }, deterministic: false } },
+  { seq: 1000001, t: 218.4, type: "run_finished", entity: "", payload: { findings: 5, leads_not_pursued: 67 } },
 ];
+
+export const MOCK_EVENTS: Event[] = translateDeep(MOCK_EVENTS_RAW);
