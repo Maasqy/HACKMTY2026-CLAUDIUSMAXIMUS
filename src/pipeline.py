@@ -60,7 +60,7 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
                 "signal": ", ".join(lead.scheme_hints) or "senales genericas",
                 "reason": "Corrida sin modelo (solo etapas deterministas): "
                           "no se investigo ningun lead.",
-                "tool_calls_made": 0,
+                "tool_calls_made": [],
                 "closed_by": "validator",
             })
         m.findings_finales = 0
@@ -76,7 +76,7 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
                 "entity": lead.entity,
                 "signal": ", ".join(lead.scheme_hints) or "senales genericas",
                 "reason": f"El modelo no estuvo disponible: {exc}",
-                "tool_calls_made": 0,
+                "tool_calls_made": [],
                 "closed_by": "validator",
             })
             continue
@@ -88,7 +88,7 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
                 "entity": lead.entity,
                 "signal": ", ".join(lead.scheme_hints) or "senales genericas",
                 "reason": draft.reason_if_not or "El investigador no encontro fraude.",
-                "tool_calls_made": draft.tool_calls_made,
+                "tool_calls_made": list(draft.tool_calls_made),
                 "closed_by": "investigator",
             })
             continue
@@ -102,7 +102,7 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
                 "entity": lead.entity,
                 "signal": ", ".join(lead.scheme_hints) or "senales genericas",
                 "reason": f"El validador rechazo la acusacion: {v.resumen}",
-                "tool_calls_made": draft.tool_calls_made,
+                "tool_calls_made": list(draft.tool_calls_made),
                 "closed_by": "validator",
             })
             continue
@@ -117,7 +117,7 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
                     "entity": lead.entity,
                     "signal": ", ".join(lead.scheme_hints) or "senales genericas",
                     "reason": ch.motivo_descarte,
-                    "tool_calls_made": draft.tool_calls_made,
+                    "tool_calls_made": list(draft.tool_calls_made),
                     "closed_by": "challenger",
                 })
                 continue
@@ -150,7 +150,7 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
             "signal": ", ".join(lead.scheme_hints) or "senales genericas",
             "reason": f"Fuera del presupuesto de investigacion (score {lead.score:.4f}, "
                       f"por debajo de los {max_leads} leads priorizados).",
-            "tool_calls_made": 0,
+            "tool_calls_made": [],
             "closed_by": "validator",
         })
 

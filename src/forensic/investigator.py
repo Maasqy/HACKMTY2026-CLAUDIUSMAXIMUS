@@ -51,11 +51,13 @@ class FindingDraft:
     exhibits: tuple[dict, ...]
     confidence: str
     reason_if_not: str
-    tool_calls_made: int
+    # Nombres de las herramientas llamadas, en orden. El schema pide un
+    # array de strings ("que consultaste"), no un contador.
+    tool_calls_made: tuple[str, ...]
     raw: dict = field(default_factory=dict, compare=False)
 
 
-def _as_draft(entity: str, data: dict, tool_calls: int) -> FindingDraft:
+def _as_draft(entity: str, data: dict, tool_calls: tuple[str, ...]) -> FindingDraft:
     ents = data.get("entities") or [entity]
     if isinstance(ents, str):
         ents = [ents]
@@ -80,7 +82,7 @@ def _as_draft(entity: str, data: dict, tool_calls: int) -> FindingDraft:
         exhibits=tuple(e for e in exhibits if isinstance(e, dict)),
         confidence=conf,
         reason_if_not=str(data.get("reason_if_not") or "").strip(),
-        tool_calls_made=tool_calls,
+        tool_calls_made=tuple(tool_calls),
         raw=data,
     )
 
@@ -102,7 +104,7 @@ def investigar_lead(estate, lead, client: LLMClient, company=None,
         {"role": "user", "content": user_prompt(lead, company.rfc)},
     ]
 
-    tool_calls_made = 0
+    tool_calls_made: list[str] = []
     for _ in range(max_steps):
         msg = client.chat(messages, tools=tools)
         calls = msg.get("tool_calls") or []
@@ -111,7 +113,7 @@ def investigar_lead(estate, lead, client: LLMClient, company=None,
             content = (msg.get("content") or "").strip()
             data = _parse_json(content)
             if data:
-                return _as_draft(lead.entity, data, tool_calls_made)
+                return _as_draft(lead.entity, data, tuple(tool_calls_made))
             # No tool call and no usable JSON: ask once for the JSON, plainly.
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user",
@@ -125,7 +127,7 @@ def investigar_lead(estate, lead, client: LLMClient, company=None,
             args = fn.get("arguments") or {}
             if isinstance(args, str):
                 args = _parse_json(args) or {}
-            tool_calls_made += 1
+            tool_calls_made.append(name)
             try:
                 result = dispatch(estate, name, args)
                 payload = _serializar_resultado(result)
@@ -138,7 +140,7 @@ def investigar_lead(estate, lead, client: LLMClient, company=None,
         entity=lead.entity, es_fraude=False, scheme_type=None, entities=(lead.entity,),
         narrative="", rule_broken="", peso_amount=0.0, exhibits=(), confidence="probable",
         reason_if_not=f"El investigador agoto {max_steps} pasos sin concluir.",
-        tool_calls_made=tool_calls_made,
+        tool_calls_made=tuple(tool_calls_made),
     )
 
 
