@@ -27,3 +27,46 @@ AMOUNT_TABLES = {"invoices": "total", "bank_txns": "amount",
 # Limites del loop de investigacion.
 MAX_STEPS_PER_RUN = 60
 MAX_LLM_CALLS_PER_RUN = 120
+
+# Ventana de reconciliacion para payment_without_invoice: se suman las facturas
+# emitidas por el vendor en el mismo mes calendario del bank_txn.
+RECONCILIATION_WINDOW_MONTHS = 1
+
+# Estados reales del listado 69-B publicado por el SAT.
+# 'definitivo'         -> acusable (efecto retroactivo por 69-B CFF)
+# 'presunto'           -> lead only, la presuncion admite prueba en contrario
+# 'desvirtuado'        -> jamas acusable, el SAT ya resolvio a favor
+# 'sentencia_favorable'-> jamas acusable, tribunal ya resolvio a favor
+EFOS_DEFINITIVO = "definitivo"
+EFOS_PRESUNTO = "presunto"
+EFOS_DESVIRTUADO = "desvirtuado"
+EFOS_SENTENCIA_FAVORABLE = "sentencia_favorable"
+# El estado "sentencia favorable" aparece con dos ortografias en el estate:
+# 'sentencia_favorable' (spec) y 'favorable' (generator). Ambas son el mismo
+# estado: el SAT ya resolvio a favor y no se acusa.
+EFOS_EXONERADO = frozenset({
+    EFOS_DESVIRTUADO, EFOS_SENTENCIA_FAVORABLE, "favorable",
+})
+EFOS_STATUSES = frozenset({EFOS_DEFINITIVO, EFOS_PRESUNTO}) | EFOS_EXONERADO
+
+# Compuerta de materialidad para ascender un match EFOS a finding.
+EFOS_MATERIALITY_MIN_FLAGS = 2
+
+# Un vendor "fresco" tiene registered_date a menos de esta ventana de la primera
+# factura emitida. Bandera de materialidad.
+VENDOR_FRESHNESS_DAYS = 90
+
+# Conceptos genericos usados como bandera de materialidad. Case-insensitive,
+# substring match sobre concepto_text.
+GENERIC_CONCEPT_PATTERNS = frozenset({
+    "diversos", "servicios varios", "asesoria general", "asesoría general",
+    "servicios profesionales", "consultoria general", "consultoría general",
+    "varios", "gastos generales", "servicios diversos",
+})
+
+# rule_broken con estas palabras se rechaza: describen un patron estadistico,
+# no una regla concreta. Los jueces exigen la regla, no la senal.
+STATISTICAL_RULE_BLOCKLIST = frozenset({
+    "outlier", "anomalia", "anomalía", "z-score", "z score",
+    "desviacion", "desviación", "cluster", "score",
+})
