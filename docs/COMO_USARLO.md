@@ -93,6 +93,16 @@ Lo que se clasifica es el perfil acumulado de un proveedor o un cliente.
 `scripts/excel_a_estate.py` convierte un Excel o unos CSV en una estate
 SQLite valida. A partir de ahi todo lo demas funciona igual.
 
+¿No tienes un Excel a la mano para probar? `scripts/generar_ejemplo_proveedores.py`
+escribe uno de prueba con 6 proveedores, dos de ellos con un patron de
+fraude sembrado a proposito (un `phantom_vendor` con un RFC real del 69-B,
+y un `kickback` que retransfiere a su propio aprobador) para que el
+pipeline tenga algo que encontrar:
+
+```bash
+python3 scripts/generar_ejemplo_proveedores.py     # -> mis_proveedores.xlsx
+```
+
 ```bash
 # 1. la plantilla con las columnas esperadas (una hoja por tabla)
 python3 scripts/excel_a_estate.py --plantilla plantilla.xlsx

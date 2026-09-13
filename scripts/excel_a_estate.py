@@ -149,7 +149,7 @@ TABLAS: dict[str, dict] = {
                  "description"],
         "prefijo": "PO",
         "alias": {
-            "po_id": ["po id", "orden de compra", "numero de orden", "folio", "id"],
+            "po_id": ["po id", "orden de compra", "orden", "numero de orden", "folio", "id"],
             "vendor_rfc": ["rfc", "rfc proveedor", "proveedor", "vendor rfc"],
             "date": ["fecha", "date"],
             "amount": ["monto", "importe", "amount", "total"],

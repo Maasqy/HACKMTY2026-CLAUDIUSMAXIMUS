@@ -59,6 +59,47 @@ else
   malo "el pipeline determinista fallo"
 fi
 
+echo "== 5b. reconciliacion de pesos: por tabla, no sumada entre tablas"
+# Regresion real: el validador interno sumaba invoices + bank_txns como si
+# fueran pesos distintos, cuando una factura y la transferencia que la pago
+# son el mismo monto visto dos veces. Eso dejaba pasar aqui hallazgos que
+# LUEGO fallaban validate_format.py (el validador de los jueces), que si
+# reconcilia por tabla. Un finding que cita una factura y su pago, con
+# peso_amount = solo el monto real (no el doble), debe validar OK; el mismo
+# finding con peso_amount duplicado debe ser rechazado.
+python3 - <<'PY' >/tmp/_recon.log 2>&1
+import sys; sys.path.insert(0, ".")
+from src.forensic.validator import validar
+from src.forensic.investigator import FindingDraft
+from src.tools import EstateDB
+
+with EstateDB("data/estates/estate_0001.db") as estate:
+    inv = estate._query("SELECT * FROM invoices LIMIT 1")[0]
+    txn = estate._query("SELECT * FROM bank_txns LIMIT 1")[0]
+    exhibits = [
+        {"exhibit_id": "EX-01", "source_table": "invoices", "record_id": inv["uuid"], "note": "x"},
+        {"exhibit_id": "EX-02", "source_table": "invoices", "record_id": inv["uuid"], "note": "x"},
+        {"exhibit_id": "EX-03", "source_table": "invoices", "record_id": inv["uuid"], "note": "x"},
+        {"exhibit_id": "EX-04", "source_table": "bank_txns", "record_id": txn["txn_id"], "note": "x"},
+    ]
+    base = dict(entity="RFC:X", entities=("RFC:X",), es_fraude=True,
+                scheme_type="phantom_vendor", confidence="probable",
+                rule_broken="x", narrative="x " * 5, reason_if_not="",
+                exhibits=tuple(exhibits), tool_calls_made=())
+    correcto = FindingDraft(peso_amount=float(inv["total"]), **base)
+    doble = FindingDraft(peso_amount=float(inv["total"]) + float(txn["amount"]), **base)
+    r1 = validar(estate, correcto)
+    r2 = validar(estate, doble)
+    ok1 = r1.ok or all("reconcilia" not in m for m in r1.motivos)
+    sys.exit(0 if (ok1 and not r2.ok) else 1)
+PY
+if [ $? = 0 ]; then
+  ok "peso_amount reconcilia por tabla (monto real pasa, monto duplicado se rechaza)"
+else
+  malo "reconciliacion de pesos incorrecta (ver /tmp/_recon.log) — riesgo de que"
+  malo "  un finding pase aqui y falle validate_format.py"
+fi
+
 echo "== 6. validador oficial de los jueces"
 python3 validate_format.py --submission /tmp/_v.json --estate data/estates/estate_0001.db 2>&1 \
   | grep -q PASS && ok "submission conforme al formato" || malo "el submission no pasa validate_format.py"
@@ -115,6 +156,19 @@ if python3 scripts/reporte_excel.py --submission /tmp/_v.json \
   ok "reporte_excel.py: busca por nombre y escribe el libro"
 else
   malo "reporte_excel.py fallo"
+fi
+
+# El generador de ejemplo debe producir un phantom_vendor y un kickback
+# reconocibles SIN LLM (solo reglas + CART) — es la prueba de que alguien
+# sin datos propios puede probar la arquitectura de punta a punta.
+if python3 scripts/generar_ejemplo_proveedores.py --salida /tmp/_ejemplo.xlsx >/dev/null 2>&1 \
+     && python3 scripts/excel_a_estate.py --entrada /tmp/_ejemplo.xlsx \
+          --salida /tmp/_ejemplo.db --puntuar >/tmp/_ejemplo.log 2>&1 \
+     && grep -q "RFC:AAA120730823.*phantom_vendor" /tmp/_ejemplo.log \
+     && grep -q "RFC:SVP200815KL9.*kickback" /tmp/_ejemplo.log; then
+  ok "generar_ejemplo_proveedores.py: el phantom_vendor y el kickback se detectan"
+else
+  malo "generar_ejemplo_proveedores.py no reproduce los casos sembrados (ver /tmp/_ejemplo.log)"
 fi
 
 if [ "$CON_MODELO" = "1" ]; then

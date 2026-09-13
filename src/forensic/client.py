@@ -116,6 +116,18 @@ class LLMClient:
             r = requests.post(url, json=payload, timeout=self.timeout_s)
             r.raise_for_status()
             return r.json()
+        except requests.exceptions.HTTPError as exc:
+            # `raise_for_status()` deja el cuerpo de la respuesta en `r`, no en
+            # `exc`. Sin capturarlo aqui, un 400 de Ollama (p. ej. "el modelo
+            # no soporta tools") se veia como "400 Client Error: Bad Request"
+            # sin decir POR QUE — imposible de diagnosticar desde el mensaje.
+            try:
+                detalle = r.json().get("error", r.text)
+            except ValueError:
+                detalle = r.text
+            raise LLMUnavailableError(
+                f"Ollama respondio {r.status_code} en {url}: {detalle}"
+            ) from exc
         except requests.RequestException as exc:
             raise LLMUnavailableError(
                 f"No se pudo contactar el modelo en {url}: {exc}. "

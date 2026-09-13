@@ -1,0 +1,174 @@
+{
+  "findings": [],
+  "leads_not_pursued": [
+    {
+      "entity": "RFC:QYQ230920LR0",
+      "signal": "kickback",
+      "reason": "El modelo no estuvo disponible: No se pudo contactar el modelo en http://localhost:11434/api/chat: 400 Client Error: Bad Request for url: http://localhost:11434/api/chat. Levanta el servidor (ollama serve) o corre con offline=True sobre un cache ya poblado.",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "EMP:0013",
+      "signal": "kickback",
+      "reason": "El modelo no estuvo disponible: No se pudo contactar el modelo en http://localhost:11434/api/chat: 400 Client Error: Bad Request for url: http://localhost:11434/api/chat. Levanta el servidor (ollama serve) o corre con offline=True sobre un cache ya poblado.",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:ETT2111012B9",
+      "signal": "phantom_vendor, threshold_splitting",
+      "reason": "El modelo no estuvo disponible: No se pudo contactar el modelo en http://localhost:11434/api/chat: 400 Client Error: Bad Request for url: http://localhost:11434/api/chat. Levanta el servidor (ollama serve) o corre con offline=True sobre un cache ya poblado.",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:FYS001013MOJ",
+      "signal": "threshold_splitting",
+      "reason": "El modelo no estuvo disponible: No se pudo contactar el modelo en http://localhost:11434/api/chat: 400 Client Error: Bad Request for url: http://localhost:11434/api/chat. Levanta el servidor (ollama serve) o corre con offline=True sobre un cache ya poblado.",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:SID160530J55",
+      "signal": "phantom_vendor",
+      "reason": "El modelo no estuvo disponible: No se pudo contactar el modelo en http://localhost:11434/api/chat: 400 Client Error: Bad Request for url: http://localhost:11434/api/chat. Levanta el servidor (ollama serve) o corre con offline=True sobre un cache ya poblado.",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:PNN260206NC1",
+      "signal": "round_tripping",
+      "reason": "Fuera del presupuesto de investigacion (score 0.9447, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:POL091208MU0",
+      "signal": "phantom_vendor",
+      "reason": "Fuera del presupuesto de investigacion (score 0.9150, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:SBS1906275S6",
+      "signal": "phantom_vendor",
+      "reason": "Fuera del presupuesto de investigacion (score 0.7825, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:FBO060726HTO",
+      "signal": "revenue_inflation",
+      "reason": "Fuera del presupuesto de investigacion (score 0.7400, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:OXX131105XZO",
+      "signal": "senales genericas",
+      "reason": "Fuera del presupuesto de investigacion (score 0.7000, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:IBS101215IT3",
+      "signal": "senales genericas",
+      "reason": "Fuera del presupuesto de investigacion (score 0.7000, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:JFL1508257KR",
+      "signal": "senales genericas",
+      "reason": "Fuera del presupuesto de investigacion (score 0.7000, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:IBC071220E88",
+      "signal": "phantom_vendor, round_tripping",
+      "reason": "Fuera del presupuesto de investigacion (score 0.6750, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:JAB210811LN1",
+      "signal": "senales genericas",
+      "reason": "Fuera del presupuesto de investigacion (score 0.5500, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:ICY071108CE9",
+      "signal": "round_tripping",
+      "reason": "Fuera del presupuesto de investigacion (score 0.5288, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:KBN020728JIV",
+      "signal": "phantom_vendor",
+      "reason": "Fuera del presupuesto de investigacion (score 0.5000, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:OUE0312041D3",
+      "signal": "revenue_inflation",
+      "reason": "Fuera del presupuesto de investigacion (score 0.5000, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:SIUF910323IQA",
+      "signal": "senales genericas",
+      "reason": "Fuera del presupuesto de investigacion (score 0.4000, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:DMR11111858P",
+      "signal": "round_tripping",
+      "reason": "Fuera del presupuesto de investigacion (score 0.3500, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:OSA001120PQN",
+      "signal": "round_tripping",
+      "reason": "Fuera del presupuesto de investigacion (score 0.3500, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    },
+    {
+      "entity": "RFC:SES040309RZZ",
+      "signal": "round_tripping",
+      "reason": "Fuera del presupuesto de investigacion (score 0.3500, por debajo de los 5 leads priorizados).",
+      "tool_calls_made": [],
+      "closed_by": "validator"
+    }
+  ],
+  "run_metadata": {
+    "llm_calls": 0,
+    "mxn_cost": 0.0,
+    "wall_clock_seconds": 0.12,
+    "deterministic": true,
+    "etapas_segundos": {
+      "deterministico_cart": 0.0335,
+      "investigador_llm": 0.0837
+    },
+    "embudo": {
+      "leads_generados": 21,
+      "leads_investigados": 0,
+      "rechazados_por_validator": 0,
+      "descartados_por_challenger": 0,
+      "findings_finales": 0
+    },
+    "cache_hits": 0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "cost_by_role": {}
+  },
+  "seed": 0
+}
