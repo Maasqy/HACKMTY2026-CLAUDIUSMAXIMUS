@@ -4,6 +4,8 @@ Viven en codigo, nunca en un prompt. La especificacion de Infosys lo exige
 explicitamente y un juez puede pedir abrir este archivo.
 """
 
+import os
+
 # Limite de autorizacion de compra. Arriba de esto se requiere segunda firma.
 APPROVAL_LIMIT_MXN = 50_000.00
 
@@ -31,8 +33,11 @@ MAX_LLM_CALLS_PER_RUN = 120
 # --- LLM (etapa 3 investigator y etapa 5 challenger) -----------------------
 # El modelo corre local (Ollama) para que la corrida replique sin red, que es
 # requisito de la spec. Todo esto vive en codigo, no en un prompt.
-LLM_MODEL = "gemma3:4b"          # tag exacto de ollama; cambialo aqui, no en el prompt
-LLM_BASE_URL = "http://localhost:11434"
+# El tag es el que responde `ollama list`. Se puede sobreescribir por entorno
+# (FORENSIC_LLM_MODEL=gemma3:12b python3 -m src.run ...) para comparar modelos
+# sin editar codigo; el valor de aqui es el que corre si nadie dice otra cosa.
+LLM_MODEL = os.environ.get("FORENSIC_LLM_MODEL", "gemma3:12b")
+LLM_BASE_URL = os.environ.get("FORENSIC_LLM_BASE_URL", "http://localhost:11434")
 LLM_SEED = 7                      # fijo: "same seed -> same case file"
 LLM_TIMEOUT_S = 120.0
 

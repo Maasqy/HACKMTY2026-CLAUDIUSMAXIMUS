@@ -1,10 +1,11 @@
 # Como usarlo
 
-Tres cosas distintas que la gente quiere hacer con esto, y el comando de cada una.
+Cuatro cosas distintas que la gente quiere hacer con esto, y el comando de cada una.
 
 1. [Verificar que todo funciona](#1-verificar-que-todo-funciona)
 2. [Ver por que el sistema decidio lo que decidio](#2-abrir-la-caja-negra)
 3. [Meter datos propios desde Excel](#3-meter-datos-propios)
+4. [Sacar el reporte de un caso y su trazabilidad](#4-un-caso-concreto-en-excel-y-su-trazabilidad)
 
 Antes de nada, una vez:
 
@@ -27,7 +28,7 @@ Comprueba, en orden: dependencias, insumos del generador, que los dos CART
 cargan y predicen sin sklearn, que el generador corre, que las etapas
 deterministas producen leads, que el submission pasa `validate_format.py`
 (el validador de los jueces), que el expediente forense se renderiza, y que
-las dos herramientas de abajo funcionan.
+las herramientas de abajo funcionan.
 
 Cada comprobacion existe porque esa cosa exacta ya se rompio alguna vez.
 
@@ -139,3 +140,92 @@ SQLite y reconcilia el monto. Un `record_id` inventado se rechaza.
 y exige que el ranking de sospecha salga **identico**, entidad por entidad y
 score por score. Si el importador pierde o deforma un dato, esa comprobacion
 falla.
+
+---
+
+## 4. Un caso concreto en Excel, y su trazabilidad
+
+`scripts/reporte_excel.py` toma una corrida y saca el expediente en Excel.
+Se le puede pasar **el nombre de la empresa**, no solo el RFC.
+
+```bash
+# todo lo de una corrida
+python3 scripts/reporte_excel.py --submission salida.json \
+    --estate data/estates/estate_0001.db --salida reporte.xlsx
+
+# un caso, por nombre
+python3 scripts/reporte_excel.py --submission salida.json \
+    --estate data/estates/estate_0001.db --empresa "Servicios Preferentes"
+
+# sin corrida previa: corre el pipeline y reporta de una vez
+python3 scripts/reporte_excel.py --estate data/estates/estate_0001.db \
+    --empresa "Servicios Preferentes"
+
+# que empresas hay en esta estate
+python3 scripts/reporte_excel.py --estate data/estates/estate_0001.db --listar-empresas
+```
+
+El nombre se busca sin importar acentos ni mayusculas y acepta un pedazo.
+Si coincide con varias, el script las lista y pide elegir en vez de
+adivinar. Tambien acepta el RFC directo.
+
+### Las cinco hojas
+
+| Hoja | Que trae |
+|---|---|
+| Resumen | empresa auditada, periodo, totales, metricas y embudo de la corrida |
+| Hallazgos | una fila por acusacion: tipo, confianza, monto, regla, narrativa |
+| Trazabilidad | la ruta del dinero paso a paso, con el registro bancario que prueba cada salto |
+| Evidencia | cada exhibit con el **contenido crudo** de su fila en SQLite |
+| Descartados | los leads que no se acusaron y la razon exacta de cada uno |
+
+### La trazabilidad
+
+Filtrando por una entidad, el script ademas imprime la cadena en la
+terminal: la regla violada, la narrativa, cada salto del dinero con su
+monto y su fecha, y la evidencia con una marca de si el registro existe de
+verdad en la base.
+
+```
+  RUTA DEL DINERO
+    1. la empresa
+       └─ $117,879.83  2026-05-04   [EX-04: bank_txns/BNK-00127]
+    → RFC:QYQ230920LR0
+    2. RFC:QYQ230920LR0
+       └─ $158,666.69  2026-05-06   [EX-05: bank_txns/BNK-00128]
+    → EMP:0013 (Ana Sofia Ramirez (compras))
+```
+
+La cadena completa es **acusacion → exhibit_id → tabla y record_id → la
+fila real**. Ningun eslabon se escribe a mano: la ruta se arma desde
+`bank_txns`, no se le pide al modelo, porque un LLM narra un flujo de
+dinero que se lee perfecto y no cuadra con la contabilidad. Y el validador
+determinista ya confirmo que cada `record_id` existe y que los montos
+reconcilian dentro del 2% antes de que el hallazgo se imprimiera.
+
+Si la empresa que buscas **no** fue acusada, el reporte dice por que: que
+senal la levanto, quien cerro el lead (investigator, validator o
+challenger) y con que razon. Suele ser mas informativo que el hallazgo.
+
+### El mismo caso, narrado y con diagrama
+
+```bash
+python3 -m src.casefile --submission salida.json \
+    --estate data/estates/estate_0001.db --out-dir expediente/
+```
+
+Produce `case_file.md` y `case_file.html`. El HTML dibuja la ruta del
+dinero como diagrama SVG —empresa → proveedor → empleado, con montos y
+fechas en cada flecha— que es la version para enseñarle a un juez.
+
+### Que modelo corre
+
+`src/config.py` lee el entorno:
+
+```bash
+FORENSIC_LLM_MODEL=gemma3:12b python3 -m src.run --estate ... --out salida.json
+```
+
+Por defecto es `gemma3:12b`, el mismo que descarga `scripts/setup_llm.sh`.
+Cambiar de modelo cambia los hallazgos, asi que el tag queda registrado en
+la corrida.

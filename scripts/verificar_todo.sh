@@ -101,6 +101,22 @@ PY
 [ $? = 0 ] && ok "excel_a_estate.py: ida y vuelta reproduce el ranking exacto" \
   || malo "excel_a_estate.py deforma los datos (ver /tmp/_imp.log)"
 
+# El reporte en Excel sobre el submission determinista (sin findings, pero con
+# leads descartados): comprueba que el libro se arma y que la busqueda por
+# nombre de empresa resuelve a un RFC.
+NOMBRE=$(python3 -c "
+import sqlite3
+c=sqlite3.connect('data/estates/estate_0001.db')
+r=c.execute('select legal_name from vendors where legal_name is not null limit 1').fetchone()
+print(r[0] if r else '')" 2>/dev/null)
+if python3 scripts/reporte_excel.py --submission /tmp/_v.json \
+     --estate data/estates/estate_0001.db --empresa "$NOMBRE" \
+     --salida /tmp/_rep.xlsx >/dev/null 2>&1 && [ -f /tmp/_rep.xlsx ]; then
+  ok "reporte_excel.py: busca por nombre y escribe el libro"
+else
+  malo "reporte_excel.py fallo"
+fi
+
 if [ "$CON_MODELO" = "1" ]; then
   echo "== 9. modelo local (Ollama)"
   bash scripts/setup_llm.sh --check >/dev/null 2>&1 && ok "modelo disponible" \
