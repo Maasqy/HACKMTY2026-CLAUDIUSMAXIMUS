@@ -54,6 +54,15 @@ LLM_MODEL = os.environ.get("FORENSIC_LLM_MODEL", "gemma3:12b")
 LLM_BASE_URL = os.environ.get("FORENSIC_LLM_BASE_URL", "http://localhost:11434")
 LLM_SEED = 7                      # fijo: "same seed -> same case file"
 LLM_TIMEOUT_S = 120.0
+# Ventana de contexto pedida a Ollama en CADA llamada. Sin esto, Ollama usa
+# su default (4096, confirmado con `ollama ps` en la maquina de prueba) y un
+# lead de varios turnos de tool-calling lo llena: prompt de sistema + catalogo
+# de herramientas + resultados de herramientas de hasta 6000 caracteres cada
+# uno agotan el espacio, y al modelo no le queda presupuesto para terminar de
+# escribir su conclusion — la respuesta se corta a la mitad del JSON (se vio
+# literal en .llm_cache/: "...record_" y nada mas). 8192 da margen para un
+# loop tipico de 5-7 turnos sin gastar VRAM de mas.
+LLM_NUM_CTX = int(os.environ.get("FORENSIC_LLM_NUM_CTX", "8192"))
 
 # Costo imputado por 1k tokens. Un modelo local no factura por token, pero la
 # spec pide un numero de MXN y "0.00 porque corre en nuestra laptop" no dice

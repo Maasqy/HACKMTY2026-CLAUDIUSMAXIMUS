@@ -41,7 +41,14 @@ from typing import Any, Optional
 
 import requests
 
-from src.config import LLM_BASE_URL, LLM_MODEL, LLM_SEED, LLM_TIMEOUT_S, MXN_PER_1K_TOKENS
+from src.config import (
+    LLM_BASE_URL,
+    LLM_MODEL,
+    LLM_NUM_CTX,
+    LLM_SEED,
+    LLM_TIMEOUT_S,
+    MXN_PER_1K_TOKENS,
+)
 
 DEFAULT_CACHE_DIR = Path(os.environ.get("FORENSIC_LLM_CACHE", ".llm_cache"))
 
@@ -88,6 +95,7 @@ class LLMClient:
     base_url: str = LLM_BASE_URL
     seed: int = LLM_SEED
     timeout_s: float = LLM_TIMEOUT_S
+    num_ctx: int = LLM_NUM_CTX
     cache_dir: Path = DEFAULT_CACHE_DIR
     offline: bool = False
     usage: LLMUsage = field(default_factory=LLMUsage)
@@ -159,12 +167,23 @@ class LLMClient:
         valid JSON. Unlike `tools`, this works on every model — it is a
         decoding constraint, not a per-model feature — so it is the
         mechanism actually used here to make replies parseable.
+
+        `num_ctx` is sent explicitly on every call rather than left to
+        Ollama's default (4096). A multi-turn tool-calling loop accumulates
+        the system prompt, the tool catalog, and every prior tool result
+        (up to 6000 characters each, see MAX_TOOL_PAYLOAD) into the same
+        context — by turn 5-6 that can fill a 4096 window, leaving the model
+        no budget to finish writing its conclusion. The observed failure
+        mode was a reply that is valid JSON up to the point it runs out of
+        room and just stops (e.g. `...,"record_` with no closing brace),
+        which investigator.py's `_parse_json` correctly treats as unparseable
+        and retries — burning an extra turn instead of fixing the cause.
         """
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0, "seed": self.seed},
+            "options": {"temperature": 0, "seed": self.seed, "num_ctx": self.num_ctx},
         }
         if tools:
             payload["tools"] = tools

@@ -69,7 +69,7 @@ echo "== 5a. el investigador nunca manda 'tools' a Ollama"
 # plano — un servidor falso aqui comprueba que ESE payload nunca vuelve a
 # llevar la llave 'tools', sin necesitar Ollama real para probarlo.
 python3 - <<'PY' >/tmp/_nottools.log 2>&1
-import json, sys, threading
+import json, sys, tempfile, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 sys.path.insert(0, ".")
 
@@ -96,9 +96,13 @@ from src.forensic.investigator import investigar_lead
 from src.scoring import generar_leads
 from src.tools import EstateDB
 
+# cache_dir propio y desechable: si reutiliza .llm_cache/, un cache hit de
+# otra comprobacion (mismo lead, mismos mensajes) hace que el mock nunca
+# reciba el request y el check pase por razones equivocadas.
 with EstateDB("data/estates/estate_0001.db") as estate:
     leads = generar_leads(estate)
-    client = LLMClient(base_url=f"http://127.0.0.1:{port}")
+    client = LLMClient(base_url=f"http://127.0.0.1:{port}",
+                       cache_dir=tempfile.mkdtemp())
     investigar_lead(estate, leads[0], client)
 
 srv.shutdown()
@@ -108,6 +112,59 @@ if [ $? = 0 ]; then
   ok "el investigador no manda 'tools' (funciona en gemma3 y en cualquier modelo)"
 else
   malo "el investigador volvio a mandar 'tools' — revienta en gemma3 (ver /tmp/_nottools.log)"
+fi
+
+echo "== 5a2. cada llamada pide una ventana de contexto explicita (num_ctx)"
+# Regresion real: sin esto Ollama usa su default (4096, confirmado con
+# `ollama ps`), y un lead de varios turnos de tool-calling lo llena con el
+# prompt de sistema + catalogo + resultados de herramientas — el modelo se
+# queda sin presupuesto para terminar de escribir su conclusion y la
+# respuesta se corta a la mitad del JSON. Se vio literal en .llm_cache/ en
+# una corrida real: JSON valido hasta cierto punto y despues nada.
+python3 - <<'PY' >/tmp/_numctx.log 2>&1
+import json, sys, tempfile, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+sys.path.insert(0, ".")
+
+visto = {"num_ctx": None, "llamadas": 0}
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        visto["num_ctx"] = body.get("options", {}).get("num_ctx")
+        visto["llamadas"] += 1
+        out = {"es_fraude": False, "reason_if_not": "prueba"}
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"message": {"role": "assistant",
+                         "content": json.dumps(out)}}).encode())
+
+srv = HTTPServer(("127.0.0.1", 0), H)
+port = srv.server_address[1]
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+from src.config import LLM_NUM_CTX
+from src.forensic.client import LLMClient
+from src.forensic.investigator import investigar_lead
+from src.scoring import generar_leads
+from src.tools import EstateDB
+
+# cache_dir propio (ver el comentario del check 5a): sin esto, el cache
+# hit del check anterior le esconde el request al mock de este check.
+with EstateDB("data/estates/estate_0001.db") as estate:
+    leads = generar_leads(estate)
+    client = LLMClient(base_url=f"http://127.0.0.1:{port}",
+                       cache_dir=tempfile.mkdtemp())
+    investigar_lead(estate, leads[0], client)
+
+srv.shutdown()
+sys.exit(0 if (visto["llamadas"] > 0 and visto["num_ctx"] == LLM_NUM_CTX) else 1)
+PY
+if [ $? = 0 ]; then
+  ok "cada llamada pide num_ctx explicito (no depende del default de Ollama)"
+else
+  malo "num_ctx no viaja en el request (ver /tmp/_numctx.log) — riesgo de respuestas cortadas"
 fi
 
 echo "== 5b. reconciliacion de pesos: por tabla, no sumada entre tablas"

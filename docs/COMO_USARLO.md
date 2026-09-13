@@ -327,3 +327,28 @@ investigador (`src/forensic/prompts.py`) lo lista explícito, palabra por
 palabra, con la instrucción de no traducirlo. El paso 5c de
 `verificar_todo.sh` comprueba que ambos archivos usen el mismo objeto y
 que los 8 nombres aparezcan, literales, en el prompt.
+
+### Por que una respuesta se corta a la mitad del JSON ("respuesta no era JSON, reintentando")
+
+Si ves ese mensaje en el progreso y quieres confirmar la causa, revisa
+`.llm_cache/`: cada respuesta del modelo se guarda ahí tal cual llegó. Una
+corrida real mostró varias respuestas que son JSON válido *hasta cierto
+punto* y después nada — literalmente cortadas a media palabra, por ejemplo
+terminando en `..."source_table": "bank_txns", "record_` sin cerrar
+comillas ni llaves. No es el modelo escribiendo texto libre: es la
+respuesta truncada antes de terminar.
+
+La causa era la ventana de contexto. `ollama ps` reporta este modelo
+corriendo con `CONTEXT 4096` (el default de Ollama si nadie pide otra
+cosa). El investigador es un loop de varios turnos: el prompt de sistema,
+el catálogo de herramientas, y cada resultado de herramienta (hasta 6000
+caracteres, ver `MAX_TOOL_PAYLOAD`) se van acumulando en la misma
+conversación. Para la llamada #5 o #6, eso ya ocupa buena parte de una
+ventana de 4096 — y al modelo no le queda presupuesto para escribir una
+conclusión completa con narrativa y 3+ exhibits, así que se corta.
+
+La corrección: `src/forensic/client.py` ahora manda `num_ctx` explícito en
+cada llamada (`LLM_NUM_CTX` en `src/config.py`, default 8192,
+sobreescribible con `FORENSIC_LLM_NUM_CTX`) en vez de depender del default
+de Ollama. El paso 5a2 de `verificar_todo.sh` comprueba, con un servidor
+falso, que `num_ctx` siempre viaja en el request.
