@@ -24,6 +24,8 @@ Dos propiedades que el track exige y que se sostienen aqui:
 
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 from src.forensic.challenger import desafiar
 from src.forensic.client import LLMClient, LLMUnavailableError
 from src.forensic.investigator import investigar_lead
@@ -34,7 +36,8 @@ from src.scoring import generar_leads
 
 
 def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
-             usar_challenger: bool = True) -> dict:
+             usar_challenger: bool = True,
+             on_progress: Optional[Callable[[str], None]] = None) -> dict:
     """Corre el pipeline sobre una estate abierta y devuelve el dict de
     submission (findings, leads_not_pursued, run_metadata).
 
@@ -42,6 +45,13 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
     el CART, para depurar sin modelo, y para que el pipeline siga siendo
     ejecutable cuando no hay Ollama levantado. En ese modo no se emite
     ningun finding — sin investigador no hay evidencia que validar.
+
+    `on_progress`, si se da, recibe una linea de texto por cada lead que
+    entra a investigacion y por cada turno del modelo dentro de ella (via
+    investigar_lead's `on_step`). Un modelo local de 12B puede tardar
+    10-40s por turno; sin esto, una corrida de varios minutos no imprime
+    nada hasta el final y se ve identica a un cuelgue. src/run.py la usa
+    para imprimir a stderr en tiempo real.
     """
     m = RunMetrics()
     findings: list[dict] = []
@@ -67,10 +77,16 @@ def ejecutar(estate, client: LLMClient | None = None, max_leads: int = 12,
         return _submission(findings, no_perseguidos, m, None)
 
     # --- etapas 3-5: Gemma -> validator -> challenger -------------------
-    for lead in leads[:max_leads]:
+    total = min(len(leads), max_leads)
+    for i, lead in enumerate(leads[:max_leads], 1):
+        if on_progress:
+            on_progress(f"lead {i}/{total}: {lead.entity} "
+                       f"(score {lead.score:.4f}, {', '.join(lead.scheme_hints) or 'sin esquema sugerido'})")
+        on_step = (lambda texto, _i=i, _t=total: on_progress(f"  lead {_i}/{_t}: {texto}")) \
+            if on_progress else None
         try:
             with m.cronometrar("investigador_llm"):
-                draft = investigar_lead(estate, lead, client, company=company)
+                draft = investigar_lead(estate, lead, client, company=company, on_step=on_step)
         except LLMUnavailableError as exc:
             no_perseguidos.append({
                 "entity": lead.entity,

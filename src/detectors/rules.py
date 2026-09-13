@@ -67,7 +67,10 @@ def detectar_texto_generico(estate, rfc: str, umbral: float = 0.5) -> Signal | N
     facturas = estate.obtener_facturas(rfc_emisor=rfc)
     if not facturas:
         return None
-    genericas = [f for f in facturas if any(w in f.concepto_text.lower() for w in GENERIC_CONCEPT_WORDS)]
+    # `or ""`: el concepto puede venir vacio en datos importados de un Excel,
+    # y una factura sin concepto no es una factura con concepto generico.
+    genericas = [f for f in facturas
+                 if any(w in (f.concepto_text or "").lower() for w in GENERIC_CONCEPT_WORDS)]
     ratio = len(genericas) / len(facturas)
     if ratio < umbral:
         return None
@@ -91,6 +94,13 @@ def detectar_sin_respaldo(estate, rfc: str) -> Signal | None:
     respalde (via perfil_proveedor)."""
     perfil = estate.perfil_proveedor(rfc)
     if perfil.num_facturas == 0 or perfil.facturas_sin_po_ni_contrato == 0:
+        return None
+    # Si la estate no trae NINGUNA orden de compra ni NINGUN contrato, no es que
+    # las facturas carezcan de respaldo: es que esos registros no se aportaron.
+    # Ausencia de evidencia no es evidencia de ausencia, y acusar aqui produce
+    # una falsa acusacion contra todos los proveedores a la vez. Pasa con datos
+    # importados de un Excel que solo trae facturas (scripts/excel_a_estate.py).
+    if not estate.obtener_ordenes_compra() and not estate.obtener_contratos():
         return None
     ratio = perfil.facturas_sin_po_ni_contrato / perfil.num_facturas
     ejemplos = estate.obtener_facturas(rfc_emisor=rfc)[:3]

@@ -41,7 +41,14 @@ from typing import Any, Optional
 
 import requests
 
-from src.config import LLM_BASE_URL, LLM_MODEL, LLM_SEED, LLM_TIMEOUT_S, MXN_PER_1K_TOKENS
+from src.config import (
+    LLM_BASE_URL,
+    LLM_MODEL,
+    LLM_NUM_CTX,
+    LLM_SEED,
+    LLM_TIMEOUT_S,
+    MXN_PER_1K_TOKENS,
+)
 
 DEFAULT_CACHE_DIR = Path(os.environ.get("FORENSIC_LLM_CACHE", ".llm_cache"))
 
@@ -88,6 +95,7 @@ class LLMClient:
     base_url: str = LLM_BASE_URL
     seed: int = LLM_SEED
     timeout_s: float = LLM_TIMEOUT_S
+    num_ctx: int = LLM_NUM_CTX
     cache_dir: Path = DEFAULT_CACHE_DIR
     offline: bool = False
     usage: LLMUsage = field(default_factory=LLMUsage)
@@ -116,6 +124,18 @@ class LLMClient:
             r = requests.post(url, json=payload, timeout=self.timeout_s)
             r.raise_for_status()
             return r.json()
+        except requests.exceptions.HTTPError as exc:
+            # `raise_for_status()` deja el cuerpo de la respuesta en `r`, no en
+            # `exc`. Sin capturarlo aqui, un 400 de Ollama (p. ej. "el modelo
+            # no soporta tools") se veia como "400 Client Error: Bad Request"
+            # sin decir POR QUE — imposible de diagnosticar desde el mensaje.
+            try:
+                detalle = r.json().get("error", r.text)
+            except ValueError:
+                detalle = r.text
+            raise LLMUnavailableError(
+                f"Ollama respondio {r.status_code} en {url}: {detalle}"
+            ) from exc
         except requests.RequestException as exc:
             raise LLMUnavailableError(
                 f"No se pudo contactar el modelo en {url}: {exc}. "
@@ -125,22 +145,50 @@ class LLMClient:
 
     # -- public --------------------------------------------------------
 
-    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None) -> dict:
+    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None,
+            format: Optional[str] = None) -> dict:
         """One turn. Returns the raw message dict from the model, which may
         carry `content`, `tool_calls`, or both.
 
         Deterministic by construction: temperature 0 and a fixed seed, so
         the same messages produce the same reply and therefore the same
         cache key on the next run.
+
+        `tools` uses Ollama's native tool-calling API — which only a small,
+        hardcoded subset of models actually support. Passing it to a model
+        outside that list (gemma3, notably) does not degrade gracefully: it
+        400s on every call with "does not support tools", which is the
+        actual failure mode this project hit. The investigator (etapa 3)
+        does not use this parameter for that reason — see
+        src/forensic/prompts.py for the model-agnostic alternative (tools
+        described in the prompt, calls requested as plain JSON).
+
+        `format="json"` asks Ollama to constrain sampling to syntactically
+        valid JSON. Unlike `tools`, this works on every model — it is a
+        decoding constraint, not a per-model feature — so it is the
+        mechanism actually used here to make replies parseable.
+
+        `num_ctx` is sent explicitly on every call rather than left to
+        Ollama's default (4096). A multi-turn tool-calling loop accumulates
+        the system prompt, the tool catalog, and every prior tool result
+        (up to 6000 characters each, see MAX_TOOL_PAYLOAD) into the same
+        context — by turn 5-6 that can fill a 4096 window, leaving the model
+        no budget to finish writing its conclusion. The observed failure
+        mode was a reply that is valid JSON up to the point it runs out of
+        room and just stops (e.g. `...,"record_` with no closing brace),
+        which investigator.py's `_parse_json` correctly treats as unparseable
+        and retries — burning an extra turn instead of fixing the cause.
         """
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0, "seed": self.seed},
+            "options": {"temperature": 0, "seed": self.seed, "num_ctx": self.num_ctx},
         }
         if tools:
             payload["tools"] = tools
+        if format:
+            payload["format"] = format
 
         key = self._cache_key(payload)
         cached = self._cache_path(key)

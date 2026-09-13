@@ -13,7 +13,9 @@
 # cifra de mxn_cost quedaria a merced de un proveedor.
 set -uo pipefail
 
-MODELO="${FORENSIC_LLM_MODEL:-gemma4:12b}"
+# Tiene que ser el tag EXACTO que imprime `ollama list`, y coincidir con
+# src/config.py — el paso 5 lo comprueba.
+MODELO="${FORENSIC_LLM_MODEL:-gemma3:12b}"
 BASE_URL="${FORENSIC_LLM_BASE_URL:-http://localhost:11434}"
 SOLO_CHECK=0
 [ "${1:-}" = "--check" ] && SOLO_CHECK=1
@@ -86,9 +88,25 @@ else
   exit 1
 fi
 
+echo "== 5. el pipeline apunta a ESTE modelo?"
+# Esta comprobacion existe por un bug real: setup_llm.sh descargaba un modelo y
+# src/config.py apuntaba a otro, asi que la corrida usaba un modelo distinto del
+# que uno creia haber instalado, sin ningun error a la vista.
+CONFIGURADO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && python3 -c \
+  "import sys; sys.path.insert(0,'.'); from src.config import LLM_MODEL; print(LLM_MODEL)" 2>/dev/null)
+if [ "$CONFIGURADO" = "$MODELO" ]; then
+  ok "src/config.py usa '$CONFIGURADO'"
+else
+  falta "src/config.py usa '$CONFIGURADO', pero aqui verificamos '$MODELO'"
+  info "corrige el default en src/config.py (LLM_MODEL), o exporta:"
+  info "    export FORENSIC_LLM_MODEL=\"$MODELO\""
+  exit 1
+fi
+
 echo
-echo "Listo. Ahora ajusta el tag en src/config.py si no coincide:"
-echo "    LLM_MODEL = \"$MODELO\""
+echo "Listo. Corre el pipeline:"
+echo "    python3 -m src.run --estate data/estates/estate_0001.db --out salida.json --max-leads 5"
 echo
-echo "Y corre el pipeline:"
-echo "    python3 -m src.run_pipeline --estate data/estates/estate_0001.db --out out/sub.json"
+echo "Y el reporte del caso que te interese:"
+echo "    python3 scripts/reporte_excel.py --submission salida.json \\"
+echo "        --estate data/estates/estate_0001.db --empresa \"NOMBRE DE LA EMPRESA\""

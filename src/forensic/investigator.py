@@ -24,12 +24,13 @@ the wall-clock number the spec asks for.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from src.config import MAX_STEPS_PER_RUN
 from src.forensic.client import LLMClient, LLMUnavailableError
-from src.forensic.prompts import SYSTEM, user_prompt
+from src.forensic.prompts import CONCLUSION_KEY, TOOL_CALL_KEY, system_with_tools, user_prompt
 from src.tools.tool_specs import build_tool_specs, dispatch
 
 
@@ -88,53 +89,108 @@ def _as_draft(entity: str, data: dict, tool_calls: tuple[str, ...]) -> FindingDr
 
 
 def investigar_lead(estate, lead, client: LLMClient, company=None,
-                    max_steps: int = MAX_STEPS_PER_RUN) -> FindingDraft:
+                    max_steps: int = MAX_STEPS_PER_RUN,
+                    on_step: Optional[Callable[[str], None]] = None) -> FindingDraft:
     """Runs the forensic loop over one lead and returns its draft.
+
+    Tool calling is PROMPTED, not Ollama's native `tools` API — see
+    src/forensic/prompts.py for why: gemma3 (what this project ships with)
+    is not in the small list of models Ollama supports native tool-calling
+    for, and passing `tools` to it 400s on every call. Instead the model is
+    asked to reply with one of two small JSON shapes: a tool request
+    ({TOOL_CALL_KEY: name, "arguments": {...}}) or a conclusion
+    ({CONCLUSION_KEY: true/false, ...}). `format="json"` constrains
+    decoding so the reply is reliably valid JSON on any model.
 
     On an unreachable model this raises LLMUnavailableError — the caller
     decides whether a run without the LLM is still worth producing. On a
     reply the client cannot parse, it returns a draft with es_fraude=False
     and a reason saying so, because one unreadable answer should cost one
     lead, not the whole run.
+
+    `on_step`, if given, is called after every model turn with a short
+    human-readable string ("llamada #2 (14.3s): pide obtener_facturas",
+    "llamada #3 (9.1s): concluye"). A local 12B model can easily take
+    10-40s per turn and a lead can take several turns, so several minutes
+    of total silence is normal — but it looks exactly like a hang from the
+    terminal. This exists so `python3 -m src.run` (see there) can print
+    that a call actually returned, instead of a bare "findings=N" only at
+    the very end.
     """
     company = company or estate.identificar_empresa()
-    tools = build_tool_specs(type(estate))
+    tool_specs = build_tool_specs(type(estate))
     messages = [
-        {"role": "system", "content": SYSTEM},
+        {"role": "system", "content": system_with_tools(tool_specs)},
         {"role": "user", "content": user_prompt(lead, company.rfc)},
     ]
 
     tool_calls_made: list[str] = []
+    intentos_sin_json = 0
+    n_llamada = 0
     for _ in range(max_steps):
-        msg = client.chat(messages, tools=tools)
-        calls = msg.get("tool_calls") or []
+        n_llamada += 1
+        t0 = time.perf_counter()
+        msg = client.chat(messages, format="json")
+        elapsed = time.perf_counter() - t0
+        content = (msg.get("content") or "").strip()
+        data = _parse_json(content)
 
-        if not calls:
-            content = (msg.get("content") or "").strip()
-            data = _parse_json(content)
-            if data:
-                return _as_draft(lead.entity, data, tuple(tool_calls_made))
-            # No tool call and no usable JSON: ask once for the JSON, plainly.
+        if not data:
+            if on_step:
+                on_step(f"llamada #{n_llamada} ({elapsed:.1f}s): respuesta no era JSON, reintentando")
+            # Sin JSON legible: se pide una vez mas, explicitamente. Si
+            # insiste en no dar JSON dos veces seguidas, se corta — seguir
+            # insistiendo indefinidamente es el mismo costo que un loop sin
+            # limite, solo que mas lento de notar.
+            intentos_sin_json += 1
+            if intentos_sin_json > 2:
+                break
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user",
-                             "content": "Responde SOLO con el objeto JSON de conclusion."})
+                             "content": "Tu respuesta no fue JSON valido. Responde SOLO con "
+                                       f"el objeto {{\"{TOOL_CALL_KEY}\": ...}} o "
+                                       f"{{\"{CONCLUSION_KEY}\": ...}}, sin texto alrededor."})
+            continue
+        intentos_sin_json = 0
+
+        if CONCLUSION_KEY in data:
+            if on_step:
+                veredicto = "es_fraude=True" if data.get(CONCLUSION_KEY) else "es_fraude=False"
+                on_step(f"llamada #{n_llamada} ({elapsed:.1f}s): concluye ({veredicto})")
+            return _as_draft(lead.entity, data, tuple(tool_calls_made))
+
+        if TOOL_CALL_KEY not in data:
+            if on_step:
+                on_step(f"llamada #{n_llamada} ({elapsed:.1f}s): JSON valido pero sin "
+                       f"\"{TOOL_CALL_KEY}\" ni \"{CONCLUSION_KEY}\", reintentando")
+            # JSON valido pero ninguna de las dos formas esperadas.
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user",
+                             "content": f"Ese JSON no trae ni \"{TOOL_CALL_KEY}\" ni "
+                                       f"\"{CONCLUSION_KEY}\". Responde con uno de los dos."})
             continue
 
-        messages.append(msg)
-        for call in calls:
-            fn = call.get("function", {})
-            name = fn.get("name", "")
-            args = fn.get("arguments") or {}
-            if isinstance(args, str):
-                args = _parse_json(args) or {}
-            tool_calls_made.append(name)
-            try:
-                result = dispatch(estate, name, args)
-                payload = _serializar_resultado(result)
-            except Exception as exc:  # herramienta inexistente o argumento invalido
-                payload = json.dumps({"error": f"{type(exc).__name__}: {exc}"},
-                                     ensure_ascii=False)
-            messages.append({"role": "tool", "name": name, "content": payload})
+        name = str(data.get(TOOL_CALL_KEY, ""))
+        args = data.get("arguments") or {}
+        if isinstance(args, str):
+            args = _parse_json(args) or {}
+        tool_calls_made.append(name)
+        if on_step:
+            on_step(f"llamada #{n_llamada} ({elapsed:.1f}s): pide {name}({args})")
+        try:
+            result = dispatch(estate, name, args)
+            payload = _serializar_resultado(result)
+        except Exception as exc:  # herramienta inexistente o argumento invalido
+            payload = json.dumps({"error": f"{type(exc).__name__}: {exc}"},
+                                 ensure_ascii=False)
+        messages.append({"role": "assistant", "content": content})
+        # Sin rol "tool" (eso tambien es parte de la API nativa que no
+        # usamos): el resultado vuelve como un turno de usuario normal, que
+        # cualquier modelo de chat entiende sin soporte especial.
+        messages.append({"role": "user",
+                         "content": f"RESULTADO de {name}:\n{payload}\n\n"
+                                   f"Continua investigando (otro {{\"{TOOL_CALL_KEY}\": ...}}) "
+                                   f"o concluye ({{\"{CONCLUSION_KEY}\": ...}})."})
 
     return FindingDraft(
         entity=lead.entity, es_fraude=False, scheme_type=None, entities=(lead.entity,),

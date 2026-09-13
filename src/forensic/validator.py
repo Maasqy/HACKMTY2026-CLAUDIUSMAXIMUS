@@ -36,10 +36,8 @@ from src.config import (
     MIN_EXHIBITS,
     PESO_TOLERANCE,
     SCHEME_TYPES,
+    SOURCE_TABLES,
 )
-
-SOURCE_TABLES = ("ledger", "invoices", "bank_txns", "vendors", "efos_list",
-                 "purchase_orders", "contracts", "employees")
 
 _ENTITY_RE = re.compile(r"^(RFC:[A-ZÑ&0-9]{12,13}|EMP:\d{4})$")
 
@@ -122,7 +120,13 @@ def validar(estate, draft) -> ValidationResult:
     # -- fondo: cada record_id tiene que existir de verdad ----------------
     inexistentes: list[str] = []
     verificados = 0
-    suma = 0.0
+    # POR TABLA, no sumado entre tablas: una factura y la transferencia que la
+    # liquido son los mismos pesos vistos dos veces. Sumarlas duplicaria el
+    # monto real y peso_amount jamas reconciliaria contra la cifra correcta.
+    # Este es exactamente el criterio de validate_format.py (el validador de
+    # los jueces) — antes este archivo sumaba entre tablas, lo cual dejaba
+    # pasar aqui hallazgos que luego fallaban ese validador oficial.
+    por_tabla: dict[str, float] = {}
     for ex in draft.exhibits:
         tabla = str(ex.get("source_table", ""))
         rid = str(ex.get("record_id", ""))
@@ -138,7 +142,7 @@ def validar(estate, draft) -> ValidationResult:
         verificados += 1
         monto = _monto_de(estate, tabla, rid)
         if monto is not None:
-            suma += monto
+            por_tabla[tabla] = por_tabla.get(tabla, 0.0) + monto
 
     if inexistentes:
         motivos.append(
@@ -149,16 +153,20 @@ def validar(estate, draft) -> ValidationResult:
     # -- reconciliacion de pesos -----------------------------------------
     declarado = float(draft.peso_amount or 0.0)
     desviacion = 0.0
+    mejor_suma = 0.0
     if declarado <= 0:
         motivos.append("peso_amount es 0 o negativo")
-    elif suma <= 0:
+    elif not por_tabla:
         motivos.append("ningun exhibit citado tiene monto con el cual reconciliar")
     else:
-        desviacion = abs(suma - declarado) / max(declarado, 1.0)
+        mejor_tabla, mejor_suma = min(por_tabla.items(), key=lambda kv: abs(declarado - kv[1]))
+        desviacion = abs(mejor_suma - declarado) / max(declarado, 1.0)
         if desviacion > PESO_TOLERANCE:
+            detalle = ", ".join(f"{t}={v:,.2f}" for t, v in sorted(por_tabla.items()))
             motivos.append(
-                f"peso_amount {declarado:,.2f} no reconcilia con la suma de exhibits "
-                f"{suma:,.2f} (desviacion {desviacion * 100:.2f}%, "
+                f"peso_amount {declarado:,.2f} no reconcilia con ninguna tabla citada "
+                f"por separado (la mas cercana es {mejor_tabla}={mejor_suma:,.2f}; "
+                f"[{detalle}]; desviacion {desviacion * 100:.2f}%, "
                 f"tolerancia {PESO_TOLERANCE * 100:.0f}%)"
             )
 
@@ -166,7 +174,7 @@ def validar(estate, draft) -> ValidationResult:
         ok=not motivos,
         motivos=tuple(motivos),
         peso_declarado=round(declarado, 2),
-        peso_reconciliado=round(suma, 2),
+        peso_reconciliado=round(mejor_suma, 2),
         desviacion_pct=round(desviacion * 100, 4),
         exhibits_verificados=verificados,
         exhibits_inexistentes=tuple(inexistentes),
