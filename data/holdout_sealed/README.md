@@ -1,74 +1,74 @@
-# Holdout sellado — seeds 911-915
+# Holdout sellado — seeds 921-925
 
-Generado: ver `git log` / fecha de este commit.
-Generador usado: estate_gen/generate_estate.py, version corregida (efos_list
-solo definitivo/presunto — Correccion 2a; cycle_pesos_in_range + facturas de
-cliente variables + decoy efos_definitivo_relacion_terminada — fix de
-varianza-cero en scheme_type, ver SOBRE_EL_MODELO.md seccion 12).
+Generador: estate_gen/generate_estate.py, version con los fixes de
+varianza-cero de SOBRE_EL_MODELO.md secciones 12 y 13 (efos_list solo
+definitivo/presunto; montos de round_tripping en banda compartida; texto
+generico, cobro de clientes, conteo de facturas y firma de ordenes como
+distribuciones y no constantes; decoys gemelos dibujados de las mismas
+distribuciones que su esquema).
 
-## Por que 911-915 y no 901-905
+## Por que 921-925
 
-Este repo ya tuvo un holdout sellado en seeds 901-905, reportado una vez
-(30/30 esquemas, 0/65 decoys falsos) contra la version del generador ANTES
-del fix de la seccion 12. Ese numero resulto estar inflado por tres
-separadores perfectos de una sola feature (ver SOBRE_EL_MODELO.md). Al
-corregir el generador, dos cosas dejan de ser validas sobre 901-905:
+Es el tercer report set de este repo, y las dos rotaciones anteriores estan
+documentadas a proposito:
 
-1. Los datos ya generados con el generador viejo no reflejan el pipeline
-   actual — regenerarlos con el generador nuevo bajo los MISMOS seeds
-   habria sido tecnicamente reproducible, pero quien ejecuta este cambio
-   (yo) ya vio el resultado del primer reporte sobre esos seeds, así que
-   reusarlos para "el" reporte final ya no habria sido ciego.
-2. Por disciplina, no seeds vistas se retiran: 901-905 quedan retiradas de
-   uso como report set. Este conjunto (911-915) es el que se reporta a
-   partir de ahora.
+  901-905  reportado una vez (30/30, 0/65) contra un generador con tres
+           separadores perfectos de una sola feature. Retirado.
+  911-915  reportado una vez (30/30 top-N, 0/70) contra un generador que
+           todavia tenia cuatro fingerprints constantes. Retirado.
+  921-925  ACTUAL.
+
+La regla que se sigue en las dos rotaciones es la misma: una vez que vi el
+resultado sobre unas seeds, esas seeds ya no sirven para un reporte ciego;
+si ademas cambia el generador, los datos viejos tampoco representan el
+pipeline actual. Se retiran y se generan otras.
 
 ## Regla
 
-- **Tuning set**: seeds 1-200 (data/estates/, eval/answers/) — usado para
-  entrenar y ajustar el modelo, los detectores y el agente.
-- **Report set**: seeds 911-915 (data/holdout_sealed/, eval/holdout_sealed/)
-  — usado UNICAMENTE para la corrida final que se reporta en el pitch.
+- **Tuning set**: seeds 1-200 (data/estates/, eval/answers/) — entrenar y
+  ajustar modelo, detectores y agente.
+- **Report set**: seeds 921-925 (data/holdout_sealed/, eval/holdout_sealed/)
+  — UNICAMENTE la corrida final que se reporta en el pitch.
 
-## Estado: REPORTADO (una vez, autorizado) — ver eval/holdout_sealed/report_seeds_911_915.csv
+Ambos conjuntos son disjuntos y ambos se nombran en el pitch, como exige la
+spec ("Report on seeds you did not tune on. Name both sets in the pitch.").
 
-Resultado:
+## Estado: REPORTADO (una vez, autorizado) — eval/holdout_sealed/report_seeds_921_925.csv
 
-  25/30 esquemas plantados dentro del top-N de leads de su propio estate (83%)
-  5/70  decoys que aparecieron falsamente en ese top-N
+  30/30 entidades plantadas aparecen en la lista de leads   (100%)
+  29/30 dentro del top-10                                    (97%)
+  24/30 dentro del top-N estricto (N = entidades plantadas)  (80%)
+   6/70 decoys colados en ese top-N
 
-Los 5 "faltantes" son EMP:0013 (lado empleado de kickback) en 4 de 5 seeds
-— el modelo ML no puntua entidades EMP, solo RFC; el lado proveedor del
-mismo esquema de kickback si aparece en el top en las 5 seeds. Los 5 falsos
-positivos son, en las 5 seeds, el mismo decoy: efos_definitivo_relacion_terminada
-(un RFC real 'definitivo' cuya relacion con la empresa termino antes del
-periodo) — una tension esperada y documentada, no un bug: ese RFC es
-razonablemente sospechoso por su historial real ante el SAT, aunque no
-participe del fraude en esta estate.
+Se reportan las tres cifras a proposito. El top-N estricto es la medida mas
+dura (exige que las 6 entidades plantadas ocupen los 6 primeros lugares);
+"en la lista" es la que corresponde a como trabaja realmente el
+investigator, que baja por los leads en orden. Las 6 entidades que salen
+del top-N son revenue_inflation (rank 7-16 en las 5 seeds) y un
+round_tripping: con clientes honestos que tambien dejan facturas sin cobrar
+al cierre, esa senal dejo de decidir por si sola, que es justo lo que se
+buscaba al corregir el generador.
 
-**A partir de ahora este conjunto sigue sellado para cualquier otro uso.**
-No se vuelve a correr nada contra el para "ver que tal va" el modelo o el
-agente — si hace falta medir de nuevo durante el desarrollo, se usa el
-tuning set (1-200). Si se necesita otra corrida de reporte final (por
-ejemplo, tras cambios al agente/investigator), usar seeds nuevas (921-925)
-y documentar aqui igual que esta, retirando 911-915.
+**A partir de aqui este conjunto queda sellado.** Nada se vuelve a correr
+contra el durante el desarrollo — para eso esta el tuning set. Si hace falta
+otro reporte final (por ejemplo tras construir el investigator), se usan
+seeds nuevas (931-935) y se documenta aqui igual que esto, retirando
+921-925.
 
 ## Regla original (para referencia)
 
-- Nadie abre estate_09NN.db para explorar datos fuera de la corrida de
-  reporte final.
-- Nadie corre build_features.py, el modelo, ni ningun detector "para ver
-  que pasa" contra estos archivos, fuera de esa corrida.
+- Nadie abre estate_09NN.db para explorar datos fuera de la corrida final.
+- Nadie corre build_features.py, el modelo ni ningun detector "para ver que
+  pasa" contra estos archivos, fuera de esa corrida.
 - Nadie lee gt_09NN.json fuera del harness de evaluacion final.
 
-Si en algun momento alguien inspecciona el contenido de estos archivos
-para otro fin, este conjunto queda contaminado: se borra y se regeneran
-otras 5 estates con seeds nuevas para reemplazarlo.
+Si alguien los inspecciona para otro fin, el conjunto queda contaminado: se
+borra y se regeneran otras 5 estates con seeds nuevas.
 
-## Verificacion de aislamiento (inspeccion de metadatos, no contenido, hecha antes de la corrida de reporte)
+## Verificacion de aislamiento (metadatos, no contenido, antes de la corrida)
 
-data/holdout_sealed/estates/estate_0911.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
-data/holdout_sealed/estates/estate_0912.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
-data/holdout_sealed/estates/estate_0913.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
-data/holdout_sealed/estates/estate_0914.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
-data/holdout_sealed/estates/estate_0915.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
+data/holdout_sealed/estates/estate_0921.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
+data/holdout_sealed/estates/estate_0922.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
+data/holdout_sealed/estates/estate_0923.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
+data/holdout_sealed/estates/estate_0924.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True
+data/holdout_sealed/estates/estate_0925.db: efos_list statuses={'definitivo', 'presunto'} schema_ok=True

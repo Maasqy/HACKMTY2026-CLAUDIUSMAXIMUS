@@ -3,25 +3,25 @@
 #
 # data/estates/*.db and eval/answers/*.json (the 200-estate tuning set) and
 # data/holdout_sealed/estates/*.db + eval/holdout_sealed/answers/*.json (the
-# 5-estate sealed report set, seeds 901-905) are NOT committed — they are
+# 5-estate sealed report set, seeds 921-925) are NOT committed — they are
 # entirely reproducible from estate_gen/generate_estate.py plus a seed, and
 # committing 50MB of regenerable data is exactly what a generator exists to
 # avoid. Run this once after cloning (or any time --clean is needed) to
 # rebuild both sets.
 #
 # Usage:
-#   scripts/rebuild_estates.sh              # tuning (1-200) + holdout (901-905)
+#   scripts/rebuild_estates.sh              # tuning (1-200) + holdout (921-925)
 #   scripts/rebuild_estates.sh --tuning-only
 #   scripts/rebuild_estates.sh --holdout-only
 #
-# IMPORTANT — the sealed holdout set: seeds 901-905 exist to be reported on
+# IMPORTANT — the sealed holdout set: seeds 921-925 exist to be reported on
 # ONCE, at the end, on seeds nobody tuned on or debugged against (see
 # data/holdout_sealed/README.md). Running this script regenerates them
 # byte-for-byte identically (the generator is deterministic per seed) — it
 # does NOT "look at" them, but if you are re-running this because you
 # suspect the holdout was inspected or trained on, treat that as
 # contamination per this repo's own rule: stop, do not regenerate, ask
-# before touching seeds 901-905 again.
+# before touching seeds 921-925 again.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -46,8 +46,8 @@ if [ "$TUNING" = "1" ]; then
 fi
 
 if [ "$HOLDOUT" = "1" ]; then
-  echo "Regenerando holdout sellado (seeds 901-905) en data/holdout_sealed/ ..."
-  for seed in 901 902 903 904 905; do
+  echo "Regenerando holdout sellado (seeds 921-925) en data/holdout_sealed/ ..."
+  for seed in 921 922 923 924 925; do
     python3 estate_gen/generate_estate.py --seed "$seed" \
       --db-dir data/holdout_sealed/estates --gt-dir eval/holdout_sealed/answers
   done

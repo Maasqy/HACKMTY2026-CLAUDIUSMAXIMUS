@@ -119,6 +119,43 @@ BAND_REVENUE = (50000.0, 320000.0)
 BAND_ROUND_TRIPPING = (20000.0, 200000.0)
 
 
+# Concepto (free-text line description) wording. A vague CFDI concepto is a
+# real audit signal, but it is NOT exclusive to fraud: plenty of legitimate
+# invoices say "servicios diversos" because whoever captured them was lazy,
+# not because the service didn't exist. Before this, every honest invoice
+# used specific wording and phantom_vendor/threshold_splitting used generic
+# wording 100% of the time, which made pct_concepto_generico a perfect
+# single-feature separator (see SOBRE_EL_MODELO.md). Both sides now draw
+# from the SAME two template pools, with different probabilities — the
+# signal survives as evidence, it just stops being proof on its own.
+GENERIC_CONCEPT_TEMPLATES = (
+    "{cat} - conceptos varios del periodo",
+    "{cat} - servicios diversos",
+    "Servicios generales de {cat_lower}",
+    "{cat} - varias partidas del mes",
+    "Suministros diversos",
+)
+SPECIFIC_CONCEPT_TEMPLATES = (
+    "{cat} - servicios del periodo",
+    "{cat} segun contrato vigente",
+    "{cat} - entregable mensual documentado",
+    "{cat} - orden de servicio con acta de entrega",
+)
+
+
+def concepto_texto(rng: random.Random, category: str, generic_prob: float) -> str:
+    """One shared concepto-text distribution. `generic_prob` is the only
+    thing that differs between an honest vendor and a scheme."""
+    pool = GENERIC_CONCEPT_TEMPLATES if rng.random() < generic_prob else SPECIFIC_CONCEPT_TEMPLATES
+    return rng.choice(pool).format(cat=category, cat_lower=category.lower())
+
+
+# How often each kind of vendor produces vague wording. Honest is NOT zero
+# and fraud is NOT one — that overlap is the whole point.
+GENERIC_PROB_HONESTO = 0.25
+GENERIC_PROB_ESQUEMA = 0.80
+
+
 def draw_amount(rng: random.Random, aml: "AMLSimSeed", low: float, high: float,
                  use_aml_prob: float = 0.5) -> float:
     """One shared amount distribution for the whole estate. About half the
@@ -566,7 +603,7 @@ def build_background(estate: Estate, sat_pool, aml: "AMLSimSeed"):
             metodo = rng.choice(METODO_PAGO)
             inv = estate.add_invoice(
                 v["rfc"], estate.company_rfc, dt, subtotal,
-                f"{v['category']} - servicios del periodo", metodo_pago=metodo,
+                concepto_texto(rng, v["category"], GENERIC_PROB_HONESTO), metodo_pago=metodo,
             )
             requester = rng.choice(EMPLOYEE_NAME_POOL)
             # A small, legitimate slice of routine/low-value purchasing gets
@@ -613,9 +650,20 @@ def build_background(estate: Estate, sat_pool, aml: "AMLSimSeed"):
             estate.add_ledger_pair(dt, "4000", "Ingresos", inv["total"],
                                     f"Ingreso factura {inv['uuid'][:8]}", inv["uuid"],
                                     "CC-100 Ventas", rng.choice(COMPANY_APPROVERS), is_revenue=True)
-            pay_date = (date.fromisoformat(dt) + timedelta(days=rng.randint(1, 15))).isoformat()
-            estate.add_bank_txn(pay_date, client_rfc[:18].ljust(18, "0"), estate.company_clabe,
-                                 inv["total"], f"Cobro factura {inv['uuid'][:8]}")
+            # Honest clients do NOT all pay inside the period. An invoice
+            # issued near period close and still outstanding at cutoff is
+            # ordinary accounts receivable, not fraud — and before this,
+            # 100% of honest revenue was collected, which made "uncollected
+            # at period end" a perfect stand-in for revenue_inflation (see
+            # SOBRE_EL_MODELO.md). Collection probability now depends on how
+            # close to the cutoff the invoice was issued, for honest clients
+            # and for the scheme alike.
+            dias_al_cierre = (estate._period_end - date.fromisoformat(dt)).days
+            cobro_prob = 0.45 if dias_al_cierre <= 30 else 0.92
+            if rng.random() < cobro_prob:
+                pay_date = (date.fromisoformat(dt) + timedelta(days=rng.randint(1, 15))).isoformat()
+                estate.add_bank_txn(pay_date, client_rfc[:18].ljust(18, "0"), estate.company_clabe,
+                                     inv["total"], f"Cobro factura {inv['uuid'][:8]}")
 
 
 def build_sat_status_population(estate: Estate, sat_pool, aml: "AMLSimSeed"):
@@ -670,7 +718,8 @@ def build_sat_status_population(estate: Estate, sat_pool, aml: "AMLSimSeed"):
             dt = estate.rand_date()
             subtotal = draw_amount(rng, aml, *BAND_SERVICIO_RECURRENTE)
             inv = estate.add_invoice(r["rfc"], estate.company_rfc, dt, subtotal,
-                                      f"{category} - servicios del periodo", metodo_pago=rng.choice(METODO_PAGO))
+                                      concepto_texto(rng, category, GENERIC_PROB_HONESTO),
+                                      metodo_pago=rng.choice(METODO_PAGO))
             requester = rng.choice(EMPLOYEE_NAME_POOL)
             approver = requester if rng.random() < 0.08 else rng.choice(COMPANY_APPROVERS)
             if rng.random() < 0.5:
@@ -731,7 +780,10 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
     # EFOS relationship is sometimes dressed up with a contract; the tell
     # is the efos_list match itself and the generic, undocumented invoices,
     # not the mere absence of a contract.
-    has_contract = rng.random() < 0.25
+    # 60%, matching the efos_definitivo_con_materialidad decoy, whose
+    # innocence narrative requires a contract — at 25% vs 60%, contract
+    # presence was itself a tell.
+    has_contract = rng.random() < 0.60
     if has_contract:
         estate.add_contract(phantom["rfc"], phantom_registered, rng.uniform(150000, 500000),
                              "Contrato de servicios de consultoria")
@@ -741,7 +793,19 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
         dt = estate.rand_date()
         amount = draw_amount(rng, aml, *BAND_SERVICIO_RECURRENTE)
         inv = estate.add_invoice(phantom["rfc"], estate.company_rfc, dt, amount,
-                                  "Servicios de consultoria diversos", metodo_pago=rng.choice(METODO_PAGO))
+                                  concepto_texto(rng, "Consultoria", GENERIC_PROB_ESQUEMA),
+                                  metodo_pago=rng.choice(METODO_PAGO))
+        # A phantom operation is often dressed up with paperwork — not every
+        # simulated invoice arrives naked. Before this the phantom had zero
+        # POs in every estate, so "es_69b_definitivo AND num_ordenes_compra<=2"
+        # identified the scheme perfectly (see SOBRE_EL_MODELO.md). The real
+        # tell is the efos_list match plus the vague concepto, not the mere
+        # absence of a purchase order.
+        if rng.random() < 0.35:
+            req_ph = rng.choice(EMPLOYEE_NAME_POOL)
+            apr_ph = req_ph if rng.random() < 0.08 else rng.choice(COMPANY_APPROVERS)
+            estate.add_po(phantom["rfc"], dt, inv["total"], req_ph, apr_ph,
+                          "Servicios de consultoria segun solicitud")
         estate.add_ledger_pair(dt, "5000", "Gastos operativos", inv["total"],
                                 f"Registro factura {inv['uuid'][:8]}", inv["uuid"],
                                 "CC-999 Sin centro definido", rng.choice(COMPANY_APPROVERS))
@@ -798,6 +862,33 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
         txn = estate.add_bank_txn(dt_cursor.isoformat(), hop_nodes[i], hop_nodes[i + 1],
                                    amt, "Transferencia entre cuentas relacionadas")
         round_txns.append(txn["txn_id"])
+    # The loop vendor also invoices ordinary work. Before this it had
+    # EXACTLY one invoice in every estate (the cycle's initiating invoice),
+    # so "num_facturas <= 2" identified round_tripping on its own — an
+    # intermediary that only ever issues a single invoice is an artifact of
+    # how we planted it, not of how round-tripping works. These extra
+    # invoices are deliberately NOT part of the scheme's supporting_invoices
+    # or peso_amount: the accusation still reconciles against the cycle
+    # alone.
+    for _ in range(rng.randint(2, 5)):
+        dt_extra = estate.rand_date()
+        extra_amount = draw_amount(rng, aml, *BAND_SERVICIO_RECURRENTE)
+        extra_inv = estate.add_invoice(
+            loop_vendor["rfc"], estate.company_rfc, dt_extra, extra_amount,
+            concepto_texto(rng, "Intermediacion comercial", GENERIC_PROB_HONESTO),
+            metodo_pago=rng.choice(METODO_PAGO))
+        requester_x = rng.choice(EMPLOYEE_NAME_POOL)
+        approver_x = requester_x if rng.random() < 0.08 else rng.choice(COMPANY_APPROVERS)
+        if rng.random() < 0.5:
+            estate.add_po(loop_vendor["rfc"], dt_extra, extra_inv["total"], requester_x, approver_x,
+                          "Intermediacion comercial segun solicitud")
+        estate.add_ledger_pair(dt_extra, "5000", "Gastos operativos", extra_inv["total"],
+                                f"Registro factura {extra_inv['uuid'][:8]}", extra_inv["uuid"],
+                                "CC-200 Comercial", approver_x)
+        if rng.random() < 0.85:
+            pay_x = (date.fromisoformat(dt_extra) + timedelta(days=rng.randint(1, 30))).isoformat()
+            estate.add_bank_txn(pay_x, estate.company_clabe, loop_vendor["bank_clabe"],
+                                 extra_inv["total"], f"Pago factura {extra_inv['uuid'][:8]}")
     schemes.append({
         "scheme_id": "S2_round_tripping", "type": "round_tripping",
         "entities": [f"RFC:{loop_vendor['rfc']}"],
@@ -835,22 +926,41 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
     split_vendor_registered = draw_registered_date(rng, estate._period_start, recent_prob=0.55)
     split_vendor = estate.add_vendor(make_rfc(rng), "Suministros Fraccionados del Valle SA de CV",
                                       split_vendor_registered)
-    if rng.random() < 0.25:
+    # 80%, not 25%: the honest near-twin of this scheme (decoy
+    # below_approval_threshold_pattern) NEEDS a standing contract for its
+    # innocence to be true, so if the scheme almost never had one,
+    # num_contratos separated the two perfectly. A supplier being split
+    # against a framework contract is realistic anyway.
+    if rng.random() < 0.80:
         estate.add_contract(split_vendor["rfc"], split_vendor_registered, rng.uniform(150000, 500000),
                              "Contrato marco de suministros")
     requester = rng.choice(EMPLOYEE_NAME_POOL)
-    approver = requester  # same requester/approver is the signal
+    # Same requester/approver is the signal, but NOT on every single order:
+    # at 100% it was a constant that no honest vendor could ever reach,
+    # which turned pct_po_mismo_requester_approver into a perfect separator.
+    # A real splitter still routes some orders through a second signature,
+    # precisely so the pattern doesn't look mechanical.
+    MISMO_FIRMANTE_PROB = 0.70
     invs, txns = [], []
     window_start = rng_choice_weighted_date(rng, date(2026, 3, 1), date(2026, 5, 1))
     n_split_pos = rng.randint(10, 14)
     for i in range(n_split_pos):
         dt = (window_start + timedelta(days=i * rng.randint(2, 5))).isoformat()
-        amount = threshold - rng.uniform(200, 3500)
+        # Not every order sits just under the limit. At 100% "just under",
+        # pct_po_justo_bajo_umbral_50k became a near-perfect separator no
+        # honest vendor could reach; a real splitter also buys ordinary
+        # small items from the same supplier.
+        if rng.random() < 0.75:
+            amount = threshold - rng.uniform(200, 3500)
+        else:
+            amount = rng.uniform(6000, 41000)
+        approver = requester if rng.random() < MISMO_FIRMANTE_PROB else rng.choice(COMPANY_APPROVERS)
         estate.add_po(split_vendor["rfc"], dt, amount, requester, approver,
                       "Suministros diversos, folio individual")
         inv = estate.add_invoice(split_vendor["rfc"], estate.company_rfc, dt,
                                   round(amount / (1 + IVA_RATE), 2),
-                                  "Suministros diversos", metodo_pago=rng.choice(METODO_PAGO))
+                                  concepto_texto(rng, "Suministros", GENERIC_PROB_ESQUEMA),
+                                  metodo_pago=rng.choice(METODO_PAGO))
         estate.add_ledger_pair(dt, "5000", "Gastos operativos", inv["total"],
                                 f"Registro factura {inv['uuid'][:8]}", inv["uuid"],
                                 "CC-150 Suministros", approver)
@@ -886,7 +996,12 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
         amount = draw_amount(rng, aml, *BAND_SERVICIO_RECURRENTE)
         inv = estate.add_invoice(kb_vendor["rfc"], estate.company_rfc, dt, amount,
                                   "Servicios especializados, tarifa preferente", metodo_pago=rng.choice(METODO_PAGO))
-        estate.add_po(kb_vendor["rfc"], dt, inv["total"], kb_employee["name"], kb_employee["name"],
+        # Same reason as threshold_splitting: the buyer signing his own
+        # orders is the signal, but at a literal 100% it was a constant no
+        # honest vendor could reach. Some orders carry a second signature.
+        kb_approver = (kb_employee["name"] if rng.random() < 0.70
+                       else rng.choice(COMPANY_APPROVERS))
+        estate.add_po(kb_vendor["rfc"], dt, inv["total"], kb_employee["name"], kb_approver,
                       "Servicios especializados por encima de tarifa de mercado")
         estate.add_ledger_pair(dt, "5000", "Gastos operativos", inv["total"],
                                 f"Registro factura {inv['uuid'][:8]}", inv["uuid"],
@@ -922,22 +1037,64 @@ def build_schemes(estate: Estate, sat_pool, aml: AMLSimSeed):
     return schemes
 
 
-def build_decoys(estate: Estate, sat_pool):
+def build_decoys(estate: Estate, sat_pool, aml: "AMLSimSeed"):
     rng = estate.rng
     decoys = []
 
     # 1. below threshold, but that's the honest per-unit contract price.
     v = estate.add_vendor(make_rfc(rng), "Fletes Contractuales del Norte SA de CV",
-                           "2021-05-10", category="Transporte")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Transporte")
     estate.add_contract(v["rfc"], "2021-06-01", 480000.0,
                          "Tarifa fija por viaje, facturacion quincenal")
     invs = []
-    for _ in range(10):
-        dt = estate.rand_date()
-        inv = estate.add_invoice(v["rfc"], estate.company_rfc, dt, rng.uniform(35000, 42000),
-                                  "Servicio de flete segun tarifa contractual", metodo_pago="PUE")
-        estate.add_po(v["rfc"], dt, inv["total"], rng.choice(EMPLOYEE_NAME_POOL),
-                      rng.choice([a for a in COMPANY_APPROVERS]), "Flete segun contrato")
+    # A NEAR-TWIN of threshold_splitting on every observable feature: same
+    # "just under 50k" band, same order count, and — in about half the
+    # estates — the same concentrated window and the same rate of orders
+    # signed by whoever requested them (a contract manager with delegated
+    # authority). The ONLY thing that differs is the ground truth: here the
+    # per-trip rate is the price actually agreed in a standing contract.
+    # Drawing the decoy from DIFFERENT distributions than the scheme is what
+    # kept this class perfectly separable (see SOBRE_EL_MODELO.md); a decoy
+    # is only worth planting if it can actually fool the model.
+    # Always concentrated, like the scheme: "facturacion quincenal" in this
+    # decoy's own contract literally means regular, clustered invoicing, so
+    # spreading it across the year was both unfaithful to its narrative and
+    # the last thing letting a model tell the twin apart.
+    concentrado = True
+    win0 = rng_choice_weighted_date(rng, date(2026, 3, 1), date(2026, 5, 1))
+    req_flete = rng.choice(EMPLOYEE_NAME_POOL)
+    mismo_prob_flete = 0.70 if rng.random() < 0.5 else 0.05
+    gen_prob_flete = GENERIC_PROB_ESQUEMA if rng.random() < 0.5 else GENERIC_PROB_HONESTO
+    for i in range(rng.randint(10, 14)):
+        dt = ((win0 + timedelta(days=i * rng.randint(2, 5))).isoformat()
+              if concentrado else estate.rand_date())
+        # NOTE: add_invoice takes the SUBTOTAL and adds IVA, while the PO is
+        # raised for the invoice TOTAL — so to land the ORDER inside the
+        # "just under 50k" band the subtotal has to be the pre-IVA figure,
+        # exactly the way threshold_splitting computes it. Setting the
+        # subtotal itself to ~47k (an earlier attempt at this decoy) pushed
+        # the order to ~55k, above the limit, which is why this decoy scored
+        # 0.0 on pct_po_justo_bajo_umbral_50k and never actually competed
+        # with the scheme.
+        # Same 75/25 mix of "just under the limit" vs ordinary smaller
+        # orders the scheme uses, and the same metodo_pago and concepto
+        # distributions. Every incidental parameter this decoy hardcoded
+        # (always PUE, always the same concepto string, always in-band)
+        # became the feature that gave it away — pct_facturas_ppd was the
+        # third one found this way. A decoy only works if it is drawn from
+        # the same distributions as the scheme on everything observable.
+        if rng.random() < 0.75:
+            monto_orden = 50000.0 - rng.uniform(200, 3500)
+        else:
+            monto_orden = rng.uniform(6000, 41000)
+        inv = estate.add_invoice(v["rfc"], estate.company_rfc, dt,
+                                  round(monto_orden / (1 + IVA_RATE), 2),
+                                  concepto_texto(rng, "Fletes", gen_prob_flete),
+                                  metodo_pago=rng.choice(METODO_PAGO))
+        apr_flete = (req_flete if rng.random() < mismo_prob_flete
+                     else rng.choice([a for a in COMPANY_APPROVERS]))
+        estate.add_po(v["rfc"], dt, inv["total"], req_flete, apr_flete, "Flete segun contrato")
         estate.add_ledger_pair(dt, "5000", "Gastos operativos", inv["total"],
                                 f"Registro factura {inv['uuid'][:8]}", inv["uuid"], "CC-400 Logistica",
                                 rng.choice(COMPANY_APPROVERS))
@@ -954,7 +1111,8 @@ def build_decoys(estate: Estate, sat_pool):
 
     # 2. purchase without PO, but small one-off with full paper trail.
     v = estate.add_vendor(make_rfc(rng), "Refacciones Rapidas Escobedo SA de CV",
-                           "2023-02-14", category="Mantenimiento")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Mantenimiento")
     dt = estate.rand_date()
     inv = estate.add_invoice(v["rfc"], estate.company_rfc, dt, 8500.0,
                               "Refaccion urgente para linea de produccion", metodo_pago="PUE")
@@ -970,7 +1128,8 @@ def build_decoys(estate: Estate, sat_pool):
 
     # 3. identical round amounts, but it's a fixed monthly fee under contract.
     v = estate.add_vendor(make_rfc(rng), "Seguridad y Vigilancia Cumbres SA de CV",
-                           "2022-08-01", category="Seguridad")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Seguridad")
     estate.add_contract(v["rfc"], "2022-09-01", 720000.0, "Iguala mensual fija por vigilancia")
     invs = []
     for m in range(8):
@@ -992,7 +1151,8 @@ def build_decoys(estate: Estate, sat_pool):
 
     # 4. employee shares a bank but there's no actual transfer.
     v = estate.add_vendor(make_rfc(rng), "Insumos de Oficina Garza Sada SA de CV",
-                           "2020-03-01", category="Papeleria")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Papeleria")
     estate.add_contract(v["rfc"], "2020-04-01", 150000.0, "Suministro trimestral de papeleria")
     emp = estate.add_employee(rng.choice(EMPLOYEE_NAME_POOL) + " (finanzas)", "Auxiliar Contable", "2020-01-15")
     invs = []
@@ -1016,7 +1176,8 @@ def build_decoys(estate: Estate, sat_pool):
 
     # 5. generic concept, but a real long-standing contract with deliverables.
     v = estate.add_vendor(make_rfc(rng), "Asesoria Fiscal Permanente SC",
-                           "2020-01-10", category="Consultoria")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Consultoria")
     estate.add_contract(v["rfc"], "2020-02-01", 960000.0,
                          "Contrato de consultoria fiscal, entregables trimestrales")
     invs = []
@@ -1099,7 +1260,8 @@ def build_decoys(estate: Estate, sat_pool):
 
     # 8. cash channel payments, but small, documented, long-standing vendor.
     v = estate.add_vendor(make_rfc(rng), "Limpieza y Mantenimiento Escobedo SA de CV",
-                           "2019-06-01", category="Limpieza")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Limpieza")
     invs = []
     for _ in range(8):
         dt = estate.rand_date()
@@ -1120,7 +1282,8 @@ def build_decoys(estate: Estate, sat_pool):
     # for a small, capped category — the same raw signal used by
     # threshold_splitting and kickback, without the fraud behind it.
     v = estate.add_vendor(make_rfc(rng), "Ferreteria Industrial Guadalupe SA de CV",
-                           "2021-09-01", category="Mantenimiento")
+                           draw_registered_date(rng, estate._period_start, recent_prob=0.55),
+                           category="Mantenimiento")
     estate.add_contract(v["rfc"], "2021-10-01", 96000.0,
                          "Contrato de reposicion de herramienta menor, delegacion autorizada")
     approver_delegado = rng.choice(EMPLOYEE_NAME_POOL) + " (jefe de mantenimiento)"
@@ -1157,17 +1320,53 @@ def build_decoys(estate: Estate, sat_pool):
     definitivo_pool = [r for r in sat_pool if r["status_norm"] == "definitivo" and r["rfc"] not in existing_rfcs_def]
     if definitivo_pool:
         r = rng.choice(definitivo_pool)
-        old_registered = (estate._period_start - timedelta(days=rng.randint(400, 900))).isoformat()
-        v = estate.add_vendor(r["rfc"], r["legal_name"], old_registered, category=rng.choice(CATEGORIES))
+        cat = rng.choice(CATEGORIES)
+        # Same registration-date distribution as phantom_vendor: an always-old
+        # vendor made dias_antiguedad_al_facturar the last thing separating
+        # this decoy from the scheme it is supposed to be a twin of.
+        old_registered = draw_registered_date(rng, estate._period_start, recent_prob=0.55)
+        v = estate.add_vendor(r["rfc"], r["legal_name"], old_registered, category=cat)
         estate.efos_list.append({"rfc": r["rfc"], "legal_name": r["legal_name"], "status": "definitivo",
                                   "publication_date": (estate._period_start - timedelta(days=rng.randint(30, 200))).isoformat()})
+        # Same idea as the flete decoy: in about half the estates this
+        # legitimate vendor ALSO captures its concepto text vaguely and
+        # ALSO lacks a purchase order on most invoices, i.e. it looks
+        # exactly like phantom_vendor on every observable feature. Only the
+        # ground truth separates them.
+        gen_prob_dec = GENERIC_PROB_ESQUEMA if rng.random() < 0.5 else GENERIC_PROB_HONESTO
+        po_prob_dec = 0.35 if rng.random() < 0.5 else 0.75
+        if rng.random() < 0.6:
+            estate.add_contract(v["rfc"], old_registered, rng.uniform(200000, 600000),
+                                 f"Contrato de {cat.lower()} con entregables y actas de recepcion")
+        invs = []
+        for _ in range(rng.randint(5, 8)):
+            dt = estate.rand_date()
+            subtotal = draw_amount(rng, aml, *BAND_SERVICIO_RECURRENTE)
+            inv = estate.add_invoice(v["rfc"], estate.company_rfc, dt, subtotal,
+                                      concepto_texto(rng, cat, gen_prob_dec),
+                                      metodo_pago=rng.choice(METODO_PAGO))
+            req = rng.choice(EMPLOYEE_NAME_POOL)
+            apr = req if rng.random() < 0.08 else rng.choice(COMPANY_APPROVERS)
+            if rng.random() < po_prob_dec:
+                estate.add_po(v["rfc"], dt, inv["total"], req, apr,
+                              f"{cat} segun contrato, con acta de recepcion")
+            estate.add_ledger_pair(dt, "5000", "Gastos operativos", inv["total"],
+                                    f"Registro factura {inv['uuid'][:8]}", inv["uuid"],
+                                    f"CC-{rng.randint(100,300)}", apr)
+            if rng.random() < 0.88:
+                pay_date = (date.fromisoformat(dt) + timedelta(days=rng.randint(1, 25))).isoformat()
+                estate.add_bank_txn(pay_date, estate.company_clabe, v["bank_clabe"],
+                                     inv["total"], f"Pago factura {inv['uuid'][:8]}")
+            invs.append(inv["uuid"])
         decoys.append({
-            "entity": f"RFC:{v['rfc']}", "signal": "efos_definitivo_relacion_terminada",
-            "why_innocent": "Aparece como 'definitivo' en el listado 69-B, pero la relacion comercial "
-                            "con este proveedor termino antes del periodo auditado: no hay una sola "
-                            "factura, orden de compra ni pago en este periodo. El status real en "
-                            "efos_list no implica, por si solo, un esquema activo hoy.",
-            "invoices": [],
+            "entity": f"RFC:{v['rfc']}", "signal": "efos_definitivo_con_materialidad",
+            "why_innocent": "Aparece como 'definitivo' en el listado 69-B, pero el servicio SI se "
+                            "presto: hay contrato con entregables, orden de compra por cada factura "
+                            "con solicitante y aprobador distintos, registro contable y pago "
+                            "rastreable. El status en efos_list hace no deducible el gasto ante el "
+                            "SAT, que es un problema fiscal de esta empresa, no evidencia de que "
+                            "esta empresa haya montado un esquema de proveedor fantasma.",
+            "invoices": invs,
         })
 
     return decoys
@@ -1188,7 +1387,7 @@ def generate(seed: int, db_dir: Path, gt_dir: Path, sat_csv: Path, amlsim_tgz: P
     build_background(estate, sat_pool, aml)
     schemes = build_schemes(estate, sat_pool, aml)
     decoys_extra_sat = build_sat_status_population(estate, sat_pool, aml)
-    decoys = build_decoys(estate, sat_pool)
+    decoys = build_decoys(estate, sat_pool, aml)
     decoys.extend(decoys_extra_sat)
 
     db_dir.mkdir(parents=True, exist_ok=True)

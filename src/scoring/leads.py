@@ -20,8 +20,11 @@ Lead is either an observed Signal or a model's own probability estimate.
 Score composition is intentionally simple and auditable — no black-box
 combination of a raw ML probability into the ranking:
 
-    score = mean(strength of every Signal on this entity)
-          + ML_SCHEME_BONUS       (only if the PRIMARY model's top class is
+    score = 1 - PRODUCTO(1 - strength_i) * (1 - ML_SCHEME_BONUS) * (1 - ML_DEFINITIVO_BONUS)
+
+donde el producto corre sobre cada Signal de la entidad, y cada factor ML
+entra solo si aplica:
+          ML_SCHEME_BONUS         (only if the PRIMARY model's top class is
             NOT 'no_esquema' — every model class contributes the same fixed
             bonus regardless of its raw probability, since on our own
             estates this model is close to deterministic and a raw
@@ -30,6 +33,21 @@ combination of a raw ML probability into the ranking:
             accuracy here is not proof of real-world accuracy)
           + ML_DEFINITIVO_BONUS   (only if the SECONDARY model's top class
             is 'definitivo'; every other situacion_sat class contributes 0)
+
+Why a noisy-OR ("1 menos el producto de los complementos") and not the mean
+of the strengths it used to be: the mean does not reward ACCUMULATION. An
+honest vendor with a single 0.6 signal tied a vendor carrying three 0.6
+signals, which is backwards — an auditor gets more suspicious as
+independent red flags stack up on the same entity, not equally suspicious.
+That flaw was invisible while each detector's signal was effectively
+exclusive to one scheme (a single signal WAS proof), and became the
+deciding factor once the generator was fixed so that honest entities also
+trip individual detectors (vague concepto text, uncollected receivables at
+period close, a self-approved purchase order). Reading the formula: each
+independent signal of strength s leaves (1 - s) of the doubt standing, so
+three mediocre signals (0.5, 0.5, 0.4) reach 0.85 while one strong-looking
+signal alone (0.6) stays at 0.60. No probability is claimed — it is a
+ranking, and the arithmetic is one line a judge can check by hand.
 
 An entity can get a Lead purely from a model catching something no
 detector's rule fired on (det_score=0, ml_bonus>0) — the point of running
@@ -117,7 +135,6 @@ def generar_leads(estate) -> list["Lead"]:
     leads: list[Lead] = []
     for entity in all_entities:
         sigs = signals_by_entity.get(entity, [])
-        det_score = sum(s.strength for s in sigs) / len(sigs) if sigs else 0.0
 
         ml_scheme_label, ml_scheme_proba = None, None
         ml_sat_label, ml_sat_proba = None, None
@@ -131,7 +148,23 @@ def generar_leads(estate) -> list["Lead"]:
 
         ml_scheme_bonus = ML_SCHEME_BONUS if ml_scheme_label not in (None, "no_esquema") else 0.0
         ml_sat_bonus = ML_DEFINITIVO_BONUS if ml_sat_label == "definitivo" else 0.0
-        score = round(min(det_score + ml_scheme_bonus + ml_sat_bonus, 1.0), 4)
+
+        # noisy-OR over EVERYTHING: each deterministic Signal and each model
+        # flag independently eats a share of the remaining doubt. The two ML
+        # contributions go inside the same product rather than being added
+        # on top, because an additive bonus plus a min(...,1.0) cap pinned
+        # half the top of the list to exactly 1.0 — and a ranking whose top
+        # entries are all tied is not a ranking. Multiplying keeps the score
+        # inside [0,1) by construction, with no cap and no ties.
+        duda = 1.0
+        for s in sigs:
+            duda *= (1.0 - s.strength)
+        det_score = round(1.0 - duda, 6)
+        duda *= (1.0 - ml_scheme_bonus) * (1.0 - ml_sat_bonus)
+        # 6 decimals, not 4: with five stacked signals the residual doubt is
+        # ~6e-5, so rounding to 4 displayed several distinct entities as a
+        # tied 1.0000 and destroyed the ordering at the very top of the list.
+        score = round(1.0 - duda, 6)
 
         # Skip entities with nothing at all to report: no Signal fired, and
         # neither model flagged anything.
