@@ -25,3 +25,8 @@ eval/holdout_sealed/answers/*.json
 # (leading slash) so a PDF that's actually part of docs/ isn't swept up.
 /*.pdf
 /PHOTO-*.jpg
+
+# Salidas locales de AMLSim (no son parte del proyecto)
+AMLSim/outputs/
+AMLSim/paramFiles/
+AMLSim/sample/outputs/
