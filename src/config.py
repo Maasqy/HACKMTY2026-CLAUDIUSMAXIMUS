@@ -33,10 +33,14 @@ MAX_LLM_CALLS_PER_RUN = 120
 # --- LLM (etapa 3 investigator y etapa 5 challenger) -----------------------
 # El modelo corre local (Ollama) para que la corrida replique sin red, que es
 # requisito de la spec. Todo esto vive en codigo, no en un prompt.
-# El tag es el que responde `ollama list`. Se puede sobreescribir por entorno
-# (FORENSIC_LLM_MODEL=gemma3:12b python3 -m src.run ...) para comparar modelos
+# El tag tiene que ser EXACTAMENTE el que imprime `ollama list`: ollama no
+# resuelve nombres parecidos, y un tag que no existe falla en la primera
+# llamada, no al arrancar. Se puede sobreescribir por entorno
+# (FORENSIC_LLM_MODEL=otro:tag python3 -m src.run ...) para comparar modelos
 # sin editar codigo; el valor de aqui es el que corre si nadie dice otra cosa.
-LLM_MODEL = os.environ.get("FORENSIC_LLM_MODEL", "gemma3:12b")
+# `bash scripts/setup_llm.sh --check` compara este valor contra lo que hay
+# instalado y, si no coincide, imprime los tags reales de tu maquina.
+LLM_MODEL = os.environ.get("FORENSIC_LLM_MODEL", "gemma4:12b")
 LLM_BASE_URL = os.environ.get("FORENSIC_LLM_BASE_URL", "http://localhost:11434")
 LLM_SEED = 7                      # fijo: "same seed -> same case file"
 LLM_TIMEOUT_S = 120.0

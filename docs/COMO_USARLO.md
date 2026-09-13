@@ -223,9 +223,23 @@ fechas en cada flecha— que es la version para enseñarle a un juez.
 `src/config.py` lee el entorno:
 
 ```bash
-FORENSIC_LLM_MODEL=gemma3:12b python3 -m src.run --estate ... --out salida.json
+FORENSIC_LLM_MODEL=gemma4:12b python3 -m src.run --estate ... --out salida.json
 ```
 
-Por defecto es `gemma3:12b`, el mismo que descarga `scripts/setup_llm.sh`.
+Por defecto es `gemma4:12b`, el mismo que descarga `scripts/setup_llm.sh`.
+
+El tag tiene que ser **exactamente** el que imprime `ollama list`: ollama no
+resuelve nombres parecidos, y un tag inexistente no falla al arrancar sino
+en la primera llamada al modelo. Para comprobarlo:
+
+```bash
+ollama list                       # el tag real, tal cual
+bash scripts/setup_llm.sh --check # compara ese tag contra src/config.py
+```
+
+El paso 5 de ese script existe por un bug real: descargaba un modelo y
+`src/config.py` apuntaba a otro, asi que la corrida usaba un modelo distinto
+del que uno creia haber instalado, sin ningun error a la vista.
+
 Cambiar de modelo cambia los hallazgos, asi que el tag queda registrado en
 la corrida.
