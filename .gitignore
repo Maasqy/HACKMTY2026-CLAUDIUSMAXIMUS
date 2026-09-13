@@ -31,3 +31,10 @@ eval/holdout_sealed/answers/*.json
 AMLSim/outputs/
 AMLSim/paramFiles/
 AMLSim/sample/outputs/
+
+# Frontend build artifacts + local tool state
+frontend/dist/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+/package-lock.json
+.claude/settings.local.json

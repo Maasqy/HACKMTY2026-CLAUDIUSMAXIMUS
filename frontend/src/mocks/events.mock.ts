@@ -4,8 +4,9 @@
 // zero-LLM determinista.
 
 import type { Event } from "@/types/events";
+import { translateDeep } from "@/lib/translate";
 
-export const MOCK_EVENTS: Event[] = [
+const MOCK_EVENTS_RAW: Event[] = [
   { seq: 1, t: 0.0, type: "run_started", entity: "", payload: { seed: 42, estate: "data\\estates\\estate_0042.db" } },
   { seq: 2, t: 0.002, type: "metrics", entity: "", payload: { company_rfc: "UDA230508OIG", company_clabe: "819600133890838637" } },
   { seq: 3, t: 0.041, type: "lead_opened", entity: "RFC:CAS141022DQ4", payload: { signal: "efos_69b_match", detector: "efos_match", monto_estimado: 638407.26, reason: "El proveedor CAS141022DQ4 (CONSTRUCCIONES ASCAR, S.A. DE C.V.) aparece en la lista 69-B con estatus favorable publicado el 2026-01-10, y emitio 7 factura(s) a la empresa por un total de $638,407.26 MXN." } },
@@ -95,3 +96,5 @@ export const MOCK_EVENTS: Event[] = [
   { seq: 1000000, t: 0.05, type: "metrics", entity: "", payload: { llm_calls: 0, mxn_cost: 0.0, wall_clock_seconds: 0.05, cost_by_role: {}, deterministic: true } },
   { seq: 1000001, t: 0.05, type: "run_finished", entity: "", payload: { findings: 2, leads_not_pursued: 67 } },
 ];
+
+export const MOCK_EVENTS: Event[] = translateDeep(MOCK_EVENTS_RAW);

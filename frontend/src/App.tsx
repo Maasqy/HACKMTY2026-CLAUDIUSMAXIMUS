@@ -10,7 +10,9 @@ import { SCHEME_LABELS } from "@/lib/schemeLabels";
 import { cn } from "@/lib/utils";
 import type { Exhibit, Finding, LeadNotPursued } from "@/types/submission";
 import type { Event as ForensicEvent } from "@/types/events";
-import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw, Brain, Search, Wrench, FileText, AlertTriangle, CheckCircle2, XCircle, Printer } from "lucide-react";
+import { Scale, Radar, ScrollText, BarChart3, Home as HomeIcon, ChevronRight, ShieldCheck, Play, Pause, RotateCcw, Brain, Search, Wrench, FileText, AlertTriangle, CheckCircle2, XCircle, Printer, Upload as UploadIcon, Info } from "lucide-react";
+import Upload from "@/routes/Upload";
+import About from "@/routes/About";
 
 function MockBanner() {
   const { isMock, isLoading, error } = useSubmission();
@@ -30,6 +32,8 @@ function Sidebar() {
     { to: "/live", label: "Live Investigation", icon: Radar },
     { to: "/leads", label: "Leads Log", icon: ScrollText },
     { to: "/metrics", label: "Metrics", icon: BarChart3 },
+    { to: "/upload", label: "Load Data", icon: UploadIcon },
+    { to: "/about", label: "How it works", icon: Info },
   ];
   return (
     <aside className="w-56 border-r border-border bg-surface flex flex-col">
@@ -749,6 +753,8 @@ export default function App() {
           <Route path="/live" element={<LiveInvestigation />} />
           <Route path="/leads" element={<LeadsLog />} />
           <Route path="/metrics" element={<MetricsDashboard />} />
+          <Route path="/upload" element={<Upload />} />
+          <Route path="/about" element={<About />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </AppShell>

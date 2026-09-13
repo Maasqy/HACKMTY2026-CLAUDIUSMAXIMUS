@@ -7,8 +7,9 @@
 // mientras el pipeline sigue evolucionando).
 
 import type { Submission } from "@/types/submission";
+import { translateDeep } from "@/lib/translate";
 
-export const MOCK_SUBMISSION: Submission = {
+const MOCK_SUBMISSION_RAW: Submission = {
   seed: 42,
   findings: [
     {
@@ -144,3 +145,5 @@ export const MOCK_SUBMISSION: Submission = {
     deterministic: true,
   },
 };
+
+export const MOCK_SUBMISSION: Submission = translateDeep(MOCK_SUBMISSION_RAW);
