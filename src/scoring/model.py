@@ -58,9 +58,45 @@ _bundle_cache: dict[str, dict] = {}
 def _load_bundle(model_path: Path) -> dict:
     key = str(model_path)
     if key not in _bundle_cache:
-        with open(model_path, "rb") as f:
-            _bundle_cache[key] = pickle.load(f)
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"No existe el modelo entrenado: {model_path}\n"
+                f"Reentrena con:  python3 ml/train_scheme_type.py\n"
+                f"y copia el .pkl resultante a {model_path.parent}/"
+            )
+        try:
+            with open(model_path, "rb") as f:
+                bundle = pickle.load(f)
+        except Exception as exc:
+            raise RuntimeError(
+                f"No se pudo deserializar {model_path.name}: {exc}\n"
+                f"Suele ser una version de scikit-learn distinta a la del entrenamiento. "
+                f"Reentrena con:  python3 ml/train_scheme_type.py"
+            ) from exc
+        _avisar_version(bundle, model_path)
+        _bundle_cache[key] = bundle
     return _bundle_cache[key]
+
+
+def _avisar_version(bundle: dict, model_path: Path) -> None:
+    """Un pickle de sklearn no garantiza compatibilidad entre versiones. Si
+    no coincide, el peor escenario no es un crash sino que cargue y prediga
+    distinto en silencio — por eso se avisa explicitamente."""
+    entrenado = bundle.get("sklearn_version")
+    if not entrenado:
+        return
+    try:
+        import sklearn
+    except ImportError:
+        return
+    if sklearn.__version__ != entrenado:
+        import warnings
+        warnings.warn(
+            f"{model_path.name} se entreno con scikit-learn {entrenado} y aqui corre "
+            f"{sklearn.__version__}. Las predicciones pueden diferir. "
+            f"Reentrena con: python3 ml/train_scheme_type.py",
+            RuntimeWarning, stacklevel=3,
+        )
 
 
 def _vector_for_row(bundle: dict, row: dict) -> "pd.DataFrame":  # noqa: F821 - pandas imported lazily below

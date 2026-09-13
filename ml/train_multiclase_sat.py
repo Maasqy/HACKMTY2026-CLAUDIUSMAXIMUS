@@ -56,6 +56,7 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+import sklearn
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -212,6 +213,10 @@ def main():
         "dias_antiguedad_median": preprocess["dias_antiguedad_median"],
         "categoria_values": preprocess["categoria_values"],
         "target_col": TARGET_COL,
+        # Version con la que se serializo: sklearn no garantiza que un
+        # pickle cargue entre versiones distintas, y un fallo silencioso
+        # al deserializar seria un modelo equivocado, no un error.
+        "sklearn_version": sklearn.__version__,
         "leaky_cols_excluded": LEAKY_COLS,
     }
     with open(args.out_dir / "modelo_cart_situacion_sat.pkl", "wb") as f:

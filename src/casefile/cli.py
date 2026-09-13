@@ -86,3 +86,7 @@ def _load_method(path: Optional[Path]) -> MethodLimits:
         cannot_detect=DEFAULT_METHOD.cannot_detect,
         reproducibility=DEFAULT_METHOD.reproducibility,
     )
+
+
+if __name__ == "__main__":  # `python3 -m src.casefile.cli` terminaba en
+    raise SystemExit(main())  # silencio con codigo 0 sin este guard.

@@ -9,12 +9,22 @@ import json
 import time
 from pathlib import Path
 
+from src.forensic.client import LLMClient
+from src.pipeline import ejecutar
+from src.tools import EstateDB
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--estate", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-leads", type=int, default=12,
+                    help="cuantos leads investigar (presupuesto de LLM)")
+    ap.add_argument("--sin-modelo", action="store_true",
+                    help="solo etapas deterministas, sin llamar al LLM")
+    ap.add_argument("--offline", action="store_true",
+                    help="replay desde el cache, sin red")
     args = ap.parse_args()
 
     if not args.estate.exists():
@@ -22,22 +32,18 @@ def main() -> int:
 
     started = time.time()
 
-    # PENDIENTE: detectores -> leads -> investigator -> challenger -> validator
-    findings: list[dict] = []
-    leads_not_pursued: list[dict] = []
+    # detectores -> leads -> investigator -> validator -> challenger.
+    # Todo el orden vive en src/pipeline.py; aqui solo se parsean argumentos.
+    # --sin-modelo corre unicamente las etapas deterministas, util cuando
+    # Ollama no esta levantado.
+    client = None if args.sin_modelo else LLMClient(offline=args.offline)
+    with EstateDB(args.estate) as estate:
+        submission = ejecutar(estate, client, max_leads=args.max_leads)
 
-    submission = {
-        "seed": args.seed,
-        "findings": findings,
-        "leads_not_pursued": leads_not_pursued,
-        "run_metadata": {
-            "llm_calls": 0,
-            "mxn_cost": 0.0,
-            "wall_clock_seconds": round(time.time() - started, 2),
-            "cost_by_role": {},
-            "deterministic": True,
-        },
-    }
+    submission["seed"] = args.seed
+    submission["run_metadata"].setdefault("cost_by_role", {})
+    findings = submission["findings"]
+    leads_not_pursued = submission["leads_not_pursued"]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(submission, indent=2, ensure_ascii=False),
                         encoding="utf-8")
