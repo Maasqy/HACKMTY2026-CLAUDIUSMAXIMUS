@@ -30,6 +30,7 @@ from src.config import (
     EFOS_MATERIALITY_MIN_FLAGS,
     EFOS_PRESUNTO,
     GENERIC_CONCEPT_PATTERNS,
+    KICKBACK_WINDOW_DAYS,
     PESO_TOLERANCE,
     VENDOR_FRESHNESS_DAYS,
 )
@@ -47,11 +48,12 @@ class PromotionResult:
 def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResult:
     router = {
         "efos_match": _promote_efos_match,
+        "kickback": _promote_kickback,
         # threshold_splitting existe como promoter (ver
         # _promote_threshold_splitting), pero sobre el sweep 1-50 subia falsas
         # acusaciones de 0 a 33. El plan es explicito: un detector no entra si
         # sube las falsas acusaciones. Queda como lead con la senal, no como
-        # finding. Se puede reactivar sumando materialidad al promoter.
+        # finding.
     }
     fn = router.get(lead.detector_id)
     if fn is None:
@@ -235,6 +237,127 @@ def _promote_efos_match(lead: Lead, db: EstateDB, company: CompanyIdentity) -> P
         "exhibits": exhibits,
         "money_trail": steps,
         "confidence": confidence,
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_kickback(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    vendor_rfc = ctx.get("vendor_rfc", "")
+    emp_id = ctx.get("employee_id", "")
+    original_txn = ctx.get("original_txn", "")
+    kickback_txn = ctx.get("kickback_txn", "")
+    reinforced = int(ctx.get("reinforced_by_pos", "0") or 0)
+
+    if reinforced == 0:
+        return PromotionResult(
+            None,
+            "kickback detectado pero el empleado no aparece como approver/requester "
+            "en POs del vendor; sin ese refuerzo no se acredita conflicto de interes. "
+            "Se mantiene como lead.",
+        )
+
+    original = db.obtener_transferencia(original_txn)
+    kick = db.obtener_transferencia(kickback_txn)
+    vendor = db.obtener_proveedor(vendor_rfc)
+    emp = db.obtener_empleado(emp_id)
+    if not all([original, kick, vendor, emp]):
+        return PromotionResult(None, "no se pudieron cargar las transferencias, vendor o empleado.")
+
+    po_ids = [rid for tbl, rid in lead.suggested_records if tbl == "purchase_orders"]
+    pos_full = []
+    for pid in po_ids:
+        row = db._one("SELECT * FROM purchase_orders WHERE po_id = ?", (pid,))
+        if row is not None:
+            from src.tools.models import PurchaseOrder
+            pos_full.append(PurchaseOrder(**dict(row)))
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    # Solo se cita el bank_txn del kickback: asi la suma per-tabla en bank_txns
+    # queda igual a peso_amount y reconcilia. El pago empresa->vendor se
+    # documenta en la narrativa y en la PO firmada por el empleado (que ya se
+    # cita entre los exhibits).
+    _add(
+        "bank_txns", kick.txn_id,
+        f"Transferencia del proveedor {vendor_rfc} a la CLABE personal del "
+        f"empleado {emp_id} por ${kick.amount:,.2f} MXN el {kick.date} "
+        f"(el pago originante empresa->vendor {original.txn_id} por "
+        f"${original.amount:,.2f} MXN esta narrado y ligado en la PO citada).",
+    )
+    _add(
+        "employees", emp.emp_id,
+        f"Registro del empleado {emp.emp_id} ({emp.name}, {emp.role}) "
+        f"con CLABE {emp.bank_clabe}.",
+    )
+    _add(
+        "vendors", vendor.rfc,
+        f"Registro del proveedor {vendor.rfc} ({vendor.legal_name}) con "
+        f"CLABE {vendor.bank_clabe or 'sin registro'}.",
+    )
+    first_po_id: str | None = None
+    for p in sorted(pos_full, key=lambda x: x.po_id):
+        pid = _add(
+            "purchase_orders", p.po_id,
+            f"PO {p.po_id} por ${p.amount:,.2f} MXN al proveedor {vendor_rfc}, "
+            f"aprobada por {p.approver} y solicitada por {p.requester}.",
+        )
+        if first_po_id is None:
+            first_po_id = p.po_id
+
+    steps = [
+        {
+            "from": f"RFC:{company.rfc}",
+            "to": f"RFC:{vendor.rfc}",
+            "amount": round(original.amount, 2),
+            "date": original.date,
+            "exhibit_id": exhibit_id_by_record[("purchase_orders", first_po_id)]
+                if first_po_id else exhibit_id_by_record[("vendors", vendor.rfc)],
+        },
+        {
+            "from": f"RFC:{vendor.rfc}",
+            "to": f"EMP:{emp.emp_id.replace('EMP:', '')}",
+            "amount": round(kick.amount, 2),
+            "date": kick.date,
+            "exhibit_id": exhibit_id_by_record[("bank_txns", kick.txn_id)],
+        },
+    ]
+
+    pct = kick.amount / original.amount if original.amount else 0
+    narrative = (
+        f"El proveedor {vendor.rfc} ({vendor.legal_name}) recibio "
+        f"${original.amount:,.2f} MXN de la empresa el {original.date}. Dentro de "
+        f"{KICKBACK_WINDOW_DAYS} dias, transfirio ${kick.amount:,.2f} MXN "
+        f"({pct * 100:.1f}%) a la CLABE personal del empleado {emp.emp_id} "
+        f"({emp.name}, {emp.role}), quien firmo {reinforced} orden(es) de compra "
+        f"al mismo proveedor. La CLABE receptora esta registrada en la tabla "
+        f"employees, no es una cuenta corporativa."
+    )
+
+    candidate = {
+        "scheme_type": "kickback",
+        "entities": [f"RFC:{vendor.rfc}", f"EMP:{emp.emp_id.replace('EMP:', '')}"],
+        "narrative": narrative,
+        "rule_broken": (
+            "Conflicto de interes: el empleado que autorizo/solicito la compra "
+            "recibio una transferencia del proveedor beneficiado."
+        ),
+        "peso_amount": round(kick.amount, 2),
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": "proven",
     }
     return PromotionResult(candidate, "ok")
 

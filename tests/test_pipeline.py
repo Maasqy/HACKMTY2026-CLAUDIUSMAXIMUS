@@ -10,7 +10,7 @@ from typing import Iterator
 
 import pytest
 
-from src.detectors import efos_match, payment_wo_inv, threshold_splitting, run_all
+from src.detectors import efos_match, kickback, payment_wo_inv, threshold_splitting, run_all
 from src.forensic.company import (
     CompanyDerivationConflict,
     CompanyIdentity,
@@ -357,6 +357,102 @@ def test_validator_rejects_unsupported_entity() -> None:
     with _estate() as db:
         v = validate(c, db)
     assert not v.aprobado and "EMP:9999" in v.motivo
+
+
+def test_kickback_positive_promotes_to_finding() -> None:
+    """Vendor->empleado 5%, empresa->vendor con la misma ventana, empleado en la PO."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:KICK', 'Empleado Kick', 'Comprador', '000000000000000777', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, requester, approver, description)"
+            " VALUES ('PO-KICK-1', ?, '2026-09-01', 200000, 'Empleado Kick', 'Empleado Kick', 'servicios')",
+            (NORMAL_VENDOR,),
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-KICK-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 200000.00, "Pago PO", "SPEI"),
+                ("BNK-KICK-2", "2026-09-07", "000000000000000004", "000000000000000777", 10000.00, "gracias", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = kickback.find_leads(db, _company())
+        entities = [l.entity for l in leads]
+        assert f"RFC:{NORMAL_VENDOR}" in entities
+        lead = next(l for l in leads if l.entity == f"RFC:{NORMAL_VENDOR}")
+        result = promote(lead, db, _company())
+    assert result.candidate is not None
+    cand = result.candidate
+    assert cand["scheme_type"] == "kickback"
+    assert f"EMP:KICK" in cand["entities"] or "EMP:KICK" in " ".join(cand["entities"])
+    assert cand["peso_amount"] == 10000.00
+    with _estate() as db2:
+        conn = db2._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:KICK', 'Empleado Kick', 'Comprador', '000000000000000777', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, requester, approver, description)"
+            " VALUES ('PO-KICK-1', ?, '2026-09-01', 200000, 'Empleado Kick', 'Empleado Kick', 'servicios')",
+            (NORMAL_VENDOR,),
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-KICK-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 200000.00, "Pago PO", "SPEI"),
+                ("BNK-KICK-2", "2026-09-07", "000000000000000004", "000000000000000777", 10000.00, "gracias", "SPEI"),
+            ],
+        )
+        conn.commit()
+        assert validate(cand, db2).aprobado
+
+
+def test_kickback_negative_pct_out_of_range() -> None:
+    """95% no es kickback plausible: la senal no dispara."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:BIG', 'X', 'Y', '000000000000000888', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-BIG-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 100000.00, "", "SPEI"),
+                ("BNK-BIG-2", "2026-09-07", "000000000000000004", "000000000000000888", 95000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = kickback.find_leads(db, _company())
+    assert not any(dict(l.detector_context).get("employee_id") == "EMP:BIG" for l in leads)
+
+
+def test_kickback_negative_no_reinforcing_po_stays_lead() -> None:
+    """Sin PO firmada por el empleado, el promoter no acusa."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO employees (emp_id, name, role, bank_clabe, hire_date)"
+            " VALUES ('EMP:NR', 'Sin Refuerzo', 'X', '000000000000000999', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-NR-1", "2026-09-05", COMPANY_CLABE, "000000000000000004", 100000.00, "", "SPEI"),
+                ("BNK-NR-2", "2026-09-07", "000000000000000004", "000000000000000999", 5000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = kickback.find_leads(db, _company())
+        lead = next(l for l in leads if dict(l.detector_context).get("employee_id") == "EMP:NR")
+        result = promote(lead, db, _company())
+    assert result.candidate is None
+    assert "refuerzo" in result.reason or "approver" in result.reason or "requester" in result.reason
 
 
 def test_threshold_splitting_positive_case() -> None:
