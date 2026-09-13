@@ -15,12 +15,11 @@ import Upload from "@/routes/Upload";
 import About from "@/routes/About";
 
 function MockBanner() {
-  const { isMock, isLoading, error } = useSubmission();
+  const { isMock, isLoading } = useSubmission();
   if (isLoading || !isMock) return null;
-  const detail = error ? ` (${error.message})` : "";
   return (
-    <div role="status" className="mono text-[11px] bg-primary/10 text-primary/90 border-b border-primary/30 px-4 py-1.5 text-center tracking-wide">
-      RUNNING ON MOCK DATA — no live pipeline output found{detail}
+    <div role="status" className="mono text-[11px] bg-primary/10 text-primary/90 border-b border-primary/30 px-4 py-1.5 text-center tracking-wide print:hidden">
+      DEMO MODE · seed 0042 sample estate — go to <span className="font-semibold">Load Data</span> to package your own company ledgers into an audit-ready estate.db
     </div>
   );
 }
@@ -236,24 +235,44 @@ function FindingDetail() {
   const f = submission.findings[idx];
   if (!f) return <Navigate to="/case" replace />;
 
-  const entity = f.entities[0] ?? "";
+  const caseNumber = `FF-${String(submission.seed).padStart(4, "0")}-${String(idx + 1).padStart(3, "0")}`;
+  const issuedOn = new Date().toISOString().slice(0, 10);
+  const companyRfc = "UDA230508OIG";
 
   return (
-    <div className="p-8 space-y-5 animate-fade-in max-w-5xl print:max-w-full print:p-4">
+    <div className="p-8 space-y-5 animate-fade-in max-w-5xl print:max-w-full print:p-0">
+      {/* Print-only forensic header */}
+      <div className="print:show pdf-header" style={{ display: "none" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+          <div>
+            <div style={{ fontSize: "8pt", letterSpacing: "0.15em", textTransform: "uppercase", opacity: 0.7 }}>
+              Fraud Forensics · Case File
+            </div>
+            <div style={{ fontSize: "16pt", fontWeight: 700, marginTop: "1mm" }}>Case {caseNumber}</div>
+          </div>
+          <div style={{ textAlign: "right", fontFamily: "'Fira Code', monospace", fontSize: "9pt" }}>
+            <div>Subject: RFC {companyRfc}</div>
+            <div>Issued: {issuedOn}</div>
+            <div>Scheme: {f.scheme_type.replace(/_/g, " ")}</div>
+            <div>Confidence: <span className="pdf-badge">{f.confidence.toUpperCase()}</span></div>
+          </div>
+        </div>
+      </div>
+
       <header className="space-y-3 print:space-y-2">
         <div className="flex items-center justify-between print:hidden">
           <Link to="/case" className="mono text-[11px] text-muted-foreground hover:text-foreground">← Back to case file</Link>
           <button
             onClick={() => window.print()}
-            className="mono text-[11px] uppercase tracking-wider px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary flex items-center gap-1.5 cursor-pointer"
+            className="mono text-[11px] uppercase tracking-wider px-3 py-1.5 rounded-md border border-primary bg-primary/10 text-primary hover:bg-primary/20 hover:border-primary flex items-center gap-1.5 cursor-pointer"
           >
-            <Printer className="h-3 w-3" /> Export report
+            <Printer className="h-3 w-3" /> Download PDF Report
           </button>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 print:hidden">
           <SchemeBadge scheme={f.scheme_type} />
           <ConfidenceBadge confidence={f.confidence} />
-          <span className="mono text-[11px] text-muted-foreground">Finding #{idx + 1}</span>
+          <span className="mono text-[11px] text-muted-foreground">Finding #{idx + 1} · Case {caseNumber}</span>
         </div>
         <h1 className="text-2xl font-semibold text-foreground">{f.entities.join(", ")}</h1>
       </header>
@@ -275,11 +294,11 @@ function FindingDetail() {
         </div>
       </section>
 
-      <ReasoningChain entity={entity} scheme={f.scheme_type} />
+      <ReasoningChain entities={f.entities} scheme={f.scheme_type} />
 
       <ExhibitsSection exhibits={f.exhibits} />
 
-      {f.money_trail && f.money_trail.length > 0 && <MoneyTrailSection trail={f.money_trail} />}
+      <MoneyTrailSection trail={f.money_trail} />
 
       <section className="rounded-lg border border-border bg-surface p-5 print:hidden">
         <div className="flex items-start gap-2 mb-2">
@@ -290,6 +309,36 @@ function FindingDetail() {
           Every claim above is traceable to a record_id in the estate. The peso amount reconciles within 2% against the cited amount-bearing tables (invoices, bank_txns, purchase_orders, contracts). The rule cited is a concrete statute or internal policy, never a statistical outlier. This report is deterministic — the same estate produces the same finding, byte-for-byte.
         </p>
       </section>
+
+      {/* Print-only forensic footer with sign-off + reproducibility */}
+      <div className="print:show pdf-footer" style={{ display: "none" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "6mm", fontFamily: "'Fira Code', monospace", fontSize: "8pt" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, marginBottom: "1mm" }}>Reproducibility statement</div>
+            <div>
+              This report was generated by Fraud Forensics (CLAUDIUS MAXIMUS · HackMTY 2026) from estate seed {submission.seed}.
+              Every exhibit ID corresponds to a record in the SQLite estate; the peso amount reconciles within the 2% tolerance
+              defined in src/config.py:RECONCILE_TOLERANCE_PCT. Re-running the pipeline against the same estate reproduces this
+              case byte-for-byte.
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, marginBottom: "1mm" }}>Run metadata</div>
+            <div>llm_calls: {submission.run_metadata.llm_calls}</div>
+            <div>mxn_cost: {formatMxn(submission.run_metadata.mxn_cost)}</div>
+            <div>wall_clock: {submission.run_metadata.wall_clock_seconds.toFixed(2)}s</div>
+            <div>deterministic: {String(submission.run_metadata.deterministic ?? false)}</div>
+          </div>
+          <div style={{ flex: 1, textAlign: "right" }}>
+            <div style={{ fontWeight: 700, marginBottom: "1mm" }}>Signatures</div>
+            <div style={{ marginTop: "6mm", borderTop: "1px solid #000", paddingTop: "1mm" }}>Investigator</div>
+            <div style={{ marginTop: "5mm", borderTop: "1px solid #000", paddingTop: "1mm" }}>Reviewer</div>
+          </div>
+        </div>
+        <div style={{ marginTop: "3mm", textAlign: "center", opacity: 0.7 }}>
+          — end of report · case {caseNumber} · {issuedOn} —
+        </div>
+      </div>
     </div>
   );
 }
@@ -334,36 +383,173 @@ function ExhibitsSection({ exhibits }: { exhibits: Exhibit[] }) {
 }
 
 function MoneyTrailSection({ trail }: { trail: Finding["money_trail"] }) {
+  const steps = trail ?? [];
   return (
-    <section className="rounded-lg border border-border bg-surface p-5">
-      <div className="flex items-start gap-2 mb-4">
+    <section className="rounded-lg border border-border bg-surface p-5 space-y-4">
+      <div className="flex items-start gap-2">
         <Radar className="h-4 w-4 text-primary shrink-0 mt-0.5" />
         <div>
           <h2 className="mono text-[10px] uppercase tracking-widest text-muted-foreground">Money trail</h2>
           <p className="mono text-[10px] text-muted-foreground/70 mt-0.5">follow the peso — each arrow is a citable bank_txn</p>
         </div>
       </div>
-      <ol className="space-y-4">
-        {(trail ?? []).map((s, i) => (
-          <li key={i} className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
-            <div className="rounded-lg border border-border bg-background/50 px-3 py-2">
-              <div className="mono text-[9px] uppercase tracking-wider text-muted-foreground">From</div>
-              <div className="mono text-sm text-foreground truncate">{s.from}</div>
-            </div>
-            <div className="flex flex-col items-center min-w-[10rem]">
-              <div className="mono text-sm text-primary font-semibold">{formatMxn(s.amount)}</div>
-              <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-primary to-transparent my-1" />
-              <div className="mono text-[10px] text-muted-foreground">{s.date} · {s.exhibit_id}</div>
-              <div className="mono text-[9px] text-muted-foreground/60 uppercase tracking-wider mt-0.5">step {i + 1}</div>
-            </div>
-            <div className="rounded-lg border border-border bg-background/50 px-3 py-2 text-right">
-              <div className="mono text-[9px] uppercase tracking-wider text-muted-foreground">To</div>
-              <div className="mono text-sm text-foreground truncate">{s.to}</div>
-            </div>
-          </li>
-        ))}
-      </ol>
+
+      <MoneyTrailDiagram steps={steps} />
+
+      <details className="mt-3">
+        <summary className="mono text-[10px] uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground">
+          Ledger view · every step ({steps.length})
+        </summary>
+        <ol className="space-y-2 mt-3">
+          {steps.map((s, i) => (
+            <li key={i} className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
+              <div className="rounded-md border border-border bg-background/50 px-3 py-2">
+                <div className="mono text-[9px] uppercase tracking-wider text-muted-foreground">From</div>
+                <div className="mono text-xs text-foreground truncate">{s.from}</div>
+              </div>
+              <div className="flex flex-col items-center min-w-[9rem]">
+                <div className="mono text-xs text-primary font-semibold">{formatMxn(s.amount)}</div>
+                <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-primary to-transparent my-1" />
+                <div className="mono text-[10px] text-muted-foreground">{s.date} · {s.exhibit_id}</div>
+              </div>
+              <div className="rounded-md border border-border bg-background/50 px-3 py-2 text-right">
+                <div className="mono text-[9px] uppercase tracking-wider text-muted-foreground">To</div>
+                <div className="mono text-xs text-foreground truncate">{s.to}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </details>
     </section>
+  );
+}
+
+function MoneyTrailDiagram({ steps }: { steps: Finding["money_trail"] }) {
+  if (!steps || steps.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-background/30 p-6 text-center">
+        <p className="mono text-[11px] text-muted-foreground italic">
+          No cash movement is recorded for this finding — the fraud is in the accounting entries only (see exhibits).
+        </p>
+      </div>
+    );
+  }
+
+  // Deduplicate nodes in order of first appearance
+  const nodeIds: string[] = [];
+  const seen = new Set<string>();
+  for (const s of steps) {
+    if (!seen.has(s.from)) { seen.add(s.from); nodeIds.push(s.from); }
+    if (!seen.has(s.to)) { seen.add(s.to); nodeIds.push(s.to); }
+  }
+
+  // Group edges by (from -> to) pair, summing amounts and collecting exhibit IDs
+  const edgeMap = new Map<string, { from: string; to: string; amount: number; count: number; dates: string[]; exhibits: string[] }>();
+  for (const s of steps) {
+    const key = `${s.from}→${s.to}`;
+    const existing = edgeMap.get(key);
+    if (existing) {
+      existing.amount += s.amount;
+      existing.count += 1;
+      existing.dates.push(s.date);
+      existing.exhibits.push(s.exhibit_id);
+    } else {
+      edgeMap.set(key, { from: s.from, to: s.to, amount: s.amount, count: 1, dates: [s.date], exhibits: [s.exhibit_id] });
+    }
+  }
+  const edges = Array.from(edgeMap.values());
+
+  // Layout — keep nodes fully within the viewBox by shrinking the node box for
+  // graphs with more than 2 entities so labels never clip on left/right edges.
+  const W = 780;
+  const H = 260;
+  const nodeCount = nodeIds.length;
+  const nodeW = nodeCount >= 3 ? 200 : 220;
+  const nodeH = 54;
+  // Ensure the node CENTER is at least nodeW/2 away from either edge.
+  const halfW = nodeW / 2;
+  const leftEdge = halfW + 8;
+  const rightEdge = W - halfW - 8;
+  const usableW = rightEdge - leftEdge;
+  const positions = new Map<string, { x: number; y: number }>();
+  nodeIds.forEach((id, i) => {
+    const x = nodeCount === 1 ? W / 2 : leftEdge + (usableW * i) / (nodeCount - 1);
+    positions.set(id, { x, y: H / 2 });
+  });
+
+  const nodeColor = (id: string): string => {
+    if (id.startsWith("EMP:")) return "#F97316";
+    if (id === "RFC:UDA230508OIG") return "#3B82F6";
+    return "#A44200";
+  };
+
+  // Draw edges with curved paths; multiple edges between same pair get different curvatures
+  const edgesByPair = new Map<string, number>();
+  const edgePaths = edges.map((e) => {
+    const pairKey = [e.from, e.to].sort().join("|");
+    const parallelIdx = edgesByPair.get(pairKey) ?? 0;
+    edgesByPair.set(pairKey, parallelIdx + 1);
+    const p1 = positions.get(e.from)!;
+    const p2 = positions.get(e.to)!;
+    const isForward = p1.x <= p2.x;
+    // Vertical offset for curve: alternate up/down and grow with parallel index
+    const curveOffset = isForward ? -60 - parallelIdx * 20 : 60 + parallelIdx * 20;
+    const midX = (p1.x + p2.x) / 2;
+    const midY = p1.y + curveOffset;
+    // Start/end just outside the nodes
+    const dx = p2.x - p1.x;
+    const dir = dx >= 0 ? 1 : -1;
+    const startX = p1.x + dir * (nodeW / 2);
+    const endX = p2.x - dir * (nodeW / 2);
+    const path = `M ${startX} ${p1.y} Q ${midX} ${midY}, ${endX} ${p2.y}`;
+    return { edge: e, path, labelX: midX, labelY: midY + (isForward ? -6 : 14) };
+  });
+
+  return (
+    <div className="rounded-md border border-border bg-background/40 overflow-hidden">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Money trail diagram">
+        <defs>
+          <marker id="arrowhead-mt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#A44200" />
+          </marker>
+        </defs>
+
+        {/* Edges */}
+        {edgePaths.map((e, i) => (
+          <g key={i}>
+            <path d={e.path} stroke="#A44200" strokeWidth={1.6} fill="none" markerEnd="url(#arrowhead-mt)" opacity={0.85} />
+            <rect x={e.labelX - 80} y={e.labelY - 20} width={160} height={30} rx={4} fill="#0A0A0A" stroke="#A44200" strokeWidth={0.7} opacity={0.95} />
+            <text x={e.labelX} y={e.labelY - 6} textAnchor="middle" className="mono" fontSize={11} fill="#F5F5F5" fontWeight={600}>
+              {formatMxn(e.edge.amount)}
+            </text>
+            <text x={e.labelX} y={e.labelY + 6} textAnchor="middle" className="mono" fontSize={9} fill="#A0A0A0">
+              {e.edge.count > 1 ? `${e.edge.count}× · ${e.edge.dates[0]}…` : e.edge.dates[0]}
+            </text>
+          </g>
+        ))}
+
+        {/* Nodes */}
+        {nodeIds.map((id) => {
+          const pos = positions.get(id)!;
+          const color = nodeColor(id);
+          const label = id.length > 22 ? id.slice(0, 21) + "…" : id;
+          const kind = id.startsWith("EMP:") ? "Employee" : id === "RFC:UDA230508OIG" ? "Company (subject)" : "Vendor";
+          return (
+            <g key={id} transform={`translate(${pos.x - nodeW / 2}, ${pos.y - nodeH / 2})`}>
+              <rect width={nodeW} height={nodeH} rx={6} fill="#141414" stroke={color} strokeWidth={1.6} />
+              <text x={nodeW / 2} y={22} textAnchor="middle" className="mono" fontSize={13} fill="#F5F5F5" fontWeight={600}>{label}</text>
+              <text x={nodeW / 2} y={40} textAnchor="middle" className="mono" fontSize={9} fill={color} letterSpacing={1}>{kind.toUpperCase()}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="px-3 py-2 border-t border-border/40 flex flex-wrap gap-4 mono text-[9px] uppercase tracking-wider text-muted-foreground">
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm border" style={{ borderColor: "#3B82F6" }} /> Company under audit</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm border" style={{ borderColor: "#A44200" }} /> Counterparty</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm border" style={{ borderColor: "#F97316" }} /> Employee</span>
+        <span className="ml-auto">{steps.length} txn · {edges.length} edges · {nodeIds.length} nodes</span>
+      </div>
+    </div>
   );
 }
 
@@ -377,15 +563,15 @@ const REASONING_ICONS: Record<string, { icon: typeof Brain; color: string; label
   finding: { icon: CheckCircle2, color: "#A44200", label: "Finding promoted" },
 };
 
-function ReasoningChain({ entity, scheme }: { entity: string; scheme: string }) {
+function ReasoningChain({ entities, scheme }: { entities: readonly string[]; scheme: string }) {
   const [events, setEvents] = useState<ForensicEvent[]>([]);
   useEffect(() => {
     loadEvents("/out/events.jsonl").then(setEvents).catch(() => setEvents(MOCK_EVENTS));
   }, []);
-  const chain = useMemo(
-    () => events.filter((e) => e.entity === entity && REASONING_ICONS[e.type]),
-    [events, entity],
-  );
+  const chain = useMemo(() => {
+    const entitySet = new Set(entities);
+    return events.filter((e) => entitySet.has(e.entity) && REASONING_ICONS[e.type]);
+  }, [events, entities]);
 
   return (
     <section className="rounded-lg border border-primary/30 bg-surface p-5 shadow-glow">
@@ -436,15 +622,22 @@ function ReasoningChain({ entity, scheme }: { entity: string; scheme: string }) 
 
 function formatReasoningPayload(type: string, p: Record<string, unknown>): string {
   if (type === "lead_opened") return String(p.reason ?? p.signal ?? "Signal detected");
-  if (type === "hypothesis") return String(p.hypothesis ?? p.scheme_type ?? "");
+  if (type === "hypothesis") {
+    // Support both `statement` (backend canonical) and legacy `hypothesis` key.
+    return String(p.statement ?? p.hypothesis ?? p.scheme_type ?? "");
+  }
   if (type === "tool_call") {
     const tool = String(p.tool ?? "unknown_tool");
     const args = p.args ? ` (${Object.entries(p.args as object).slice(0, 2).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 30)}`).join(", ")})` : "";
-    const rows = p.result_rows ? ` → ${p.result_rows} rows` : "";
-    return `Called ${tool}${args}${rows}`;
+    const summary = p.result_summary ? ` → ${p.result_summary}` : p.result_rows ? ` → ${p.result_rows} rows` : "";
+    return `Called ${tool}${args}${summary}`;
   }
   if (type === "evidence") return String(p.note ?? `${p.source_table}/${p.record_id}`);
-  if (type === "challenge") return `${p.challenge ?? ""} → ${p.response ?? ""}`;
+  if (type === "challenge") {
+    const objection = String(p.objection ?? p.challenge ?? "");
+    const resolved = p.resolved === true ? " · resolved" : p.resolved === false ? " · pending" : "";
+    return `${objection}${resolved}`;
+  }
   if (type === "lead_closed") return `Closed by ${p.closed_by ?? "unknown"}: ${p.reason ?? ""}`;
   if (type === "finding") return `Promoted to finding: ${p.scheme_type ?? ""} — ${p.rule_broken ?? ""}`;
   return JSON.stringify(p).slice(0, 200);
