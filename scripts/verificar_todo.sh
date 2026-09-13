@@ -71,11 +71,41 @@ else
   malo "el renderizador del expediente fallo"
 fi
 
+echo "== 8. herramientas de inspeccion y de datos propios"
+python3 scripts/explicar.py --estate data/estates/estate_0001.db --top 3 >/dev/null 2>&1 \
+  && ok "scripts/explicar.py corre" || malo "scripts/explicar.py fallo"
+# Ida y vuelta: vuelca una estate a CSV, la reimporta y exige el MISMO ranking.
+# Si el importador pierde o deforma un dato, los scores cambian y esto falla.
+python3 - <<'PY' >/tmp/_imp.log 2>&1
+import csv, sqlite3, subprocess, sys, tempfile
+from pathlib import Path
+d = Path(tempfile.mkdtemp())
+con = sqlite3.connect("data/estates/estate_0001.db"); con.row_factory = sqlite3.Row
+for t in ("vendors","invoices","ledger","bank_txns","purchase_orders","contracts","employees","efos_list"):
+    rows = con.execute(f"select * from {t}").fetchall()
+    if not rows: continue
+    with open(d / f"{t}.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f); w.writerow(rows[0].keys())
+        for r in rows: w.writerow([r[c] for c in rows[0].keys()])
+subprocess.run([sys.executable, "scripts/excel_a_estate.py", "--entrada", str(d),
+                "--salida", str(d / "rt.db")], check=True, capture_output=True)
+sys.path.insert(0, ".")
+from src.scoring import generar_leads
+from src.tools import EstateDB
+def ranking(p):
+    with EstateDB(p) as e:
+        return [(l.entity, l.score) for l in generar_leads(e)]
+a, b = ranking("data/estates/estate_0001.db"), ranking(d / "rt.db")
+sys.exit(0 if a == b else 1)
+PY
+[ $? = 0 ] && ok "excel_a_estate.py: ida y vuelta reproduce el ranking exacto" \
+  || malo "excel_a_estate.py deforma los datos (ver /tmp/_imp.log)"
+
 if [ "$CON_MODELO" = "1" ]; then
-  echo "== 8. modelo local (Ollama)"
+  echo "== 9. modelo local (Ollama)"
   bash scripts/setup_llm.sh --check >/dev/null 2>&1 && ok "modelo disponible" \
     || malo "modelo no disponible (bash scripts/setup_llm.sh)"
-  echo "== 9. pipeline COMPLETO con LLM"
+  echo "== 10. pipeline COMPLETO con LLM"
   if python3 -m src.run --estate data/estates/estate_0001.db --out /tmp/_vf.json --max-leads 3 >/dev/null 2>&1; then
     ok "corrida completa"
     python3 validate_format.py --submission /tmp/_vf.json --estate data/estates/estate_0001.db 2>&1 \

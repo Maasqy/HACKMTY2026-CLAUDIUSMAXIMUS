@@ -64,7 +64,7 @@ def construir_features_entidad(estate, rfc: str, company=None) -> dict:
     empleados = estate.buscar_empleados()
 
     n_inv = len(facturas)
-    montos = [f.total for f in facturas]
+    montos = [f.total or 0.0 for f in facturas]
     monto_total = round(sum(montos), 2) if montos else 0.0
     monto_prom = round(monto_total / n_inv, 2) if n_inv else 0.0
     monto_max = round(max(montos), 2) if montos else 0.0
@@ -88,11 +88,16 @@ def construir_features_entidad(estate, rfc: str, company=None) -> dict:
         primera = min(f.issue_date for f in facturas)
         dias_antiguedad = _dias_entre(vendor.registered_date, primera)
 
-    generic_hits = sum(1 for f in facturas if any(w in f.concepto_text.lower() for w in GENERIC_CONCEPT_WORDS))
+    generic_hits = sum(1 for f in facturas
+                       if any(w in (f.concepto_text or "").lower() for w in GENERIC_CONCEPT_WORDS))
     pct_concepto_generico = round(generic_hits / n_inv, 4) if n_inv else 0.0
 
+    # Sin CLABE no hay a que ligar los pagos. Ojo: obtener_transferencias(clabe=None)
+    # devuelve TODAS las transferencias de la estate, asi que hay que cortar aqui o
+    # un proveedor sin cuenta conocida se llevaria el credito de todos los pagos.
     entrantes_vendor = (
-        estate.obtener_transferencias(clabe=vendor.bank_clabe, direccion="entrante") if es_proveedor else []
+        estate.obtener_transferencias(clabe=vendor.bank_clabe, direccion="entrante")
+        if es_proveedor and vendor.bank_clabe else []
     )
     n_pagadas = sum(
         1 for f in facturas if any(abs(t.amount - f.total) <= 0.01 * max(f.total, 1) for t in entrantes_vendor)
@@ -106,12 +111,14 @@ def construir_features_entidad(estate, rfc: str, company=None) -> dict:
         sum(e.debit for uid in invoice_uuids for e in estate.obtener_asientos_contables(invoice_uuid=uid)), 2
     ) if invoice_uuids else 0.0
 
-    employee_clabes = {e.bank_clabe for e in empleados}
+    # Una CLABE puede venir vacia: el esquema no la hace obligatoria, y unos
+    # datos reales importados con scripts/excel_a_estate.py rara vez las traen
+    # todas. Una CLABE ausente no coincide con nadie — vale 0, no revienta.
+    employee_clabes = {e.bank_clabe for e in empleados if e.bank_clabe}
     employee_institutions = {c[:3] for c in employee_clabes if len(c) >= 3}
-    clabe_identica = int(vendor.bank_clabe in employee_clabes) if es_proveedor else 0
-    institucion_igual = (
-        int(vendor.bank_clabe[:3] in employee_institutions) if es_proveedor and len(vendor.bank_clabe) >= 3 else 0
-    )
+    clabe_vendor = (vendor.bank_clabe or "") if es_proveedor else ""
+    clabe_identica = int(bool(clabe_vendor) and clabe_vendor in employee_clabes)
+    institucion_igual = int(len(clabe_vendor) >= 3 and clabe_vendor[:3] in employee_institutions)
 
     efos = estate.esta_en_lista_69b(rfc)
     en_69b = int(efos is not None)
