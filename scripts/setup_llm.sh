@@ -13,7 +13,7 @@
 # cifra de mxn_cost quedaria a merced de un proveedor.
 set -uo pipefail
 
-MODELO="${FORENSIC_LLM_MODEL:-gemma3:12b}"
+MODELO="${FORENSIC_LLM_MODEL:-gemma4:12b}"
 BASE_URL="${FORENSIC_LLM_BASE_URL:-http://localhost:11434}"
 SOLO_CHECK=0
 [ "${1:-}" = "--check" ] && SOLO_CHECK=1
