@@ -27,3 +27,17 @@ AMOUNT_TABLES = {"invoices": "total", "bank_txns": "amount",
 # Limites del loop de investigacion.
 MAX_STEPS_PER_RUN = 60
 MAX_LLM_CALLS_PER_RUN = 120
+
+# Ventana de reconciliacion para payment_without_invoice: se suman las facturas
+# emitidas por el vendor en el mismo mes calendario del bank_txn.
+RECONCILIATION_WINDOW_MONTHS = 1
+
+# Estatus de efos_list que la ley SAT considera acusable en si mismo.
+EFOS_DEFINITIVO = "definitivo"
+
+# rule_broken con estas palabras se rechaza: describen un patron estadistico,
+# no una regla concreta. Los jueces exigen la regla, no la senal.
+STATISTICAL_RULE_BLOCKLIST = frozenset({
+    "outlier", "anomalia", "anomalía", "z-score", "z score",
+    "desviacion", "desviación", "cluster", "score",
+})

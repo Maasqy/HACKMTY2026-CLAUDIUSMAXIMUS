@@ -1,48 +1,125 @@
 """Punto de entrada. La ruta del estate se recibe en tiempo de ejecucion.
 
-    python3 -m src.run --estate data/estates/estate_0042.db --out submission.json
+    python3 -m src.run --estate data/estates/estate_0042.db --out out/submission.json
+
+Baseline zero-LLM:
+  1. Deriva la empresa auditada (RFC + CLABE) con contraste cruzado.
+  2. Corre los detectores registrados.
+  3. Para cada lead intenta promoter -> validator; si el gate aprueba va a
+     findings, si no, va a leads_not_pursued con closed_by='validator' y la
+     razon concreta.
+  4. Serializa determinista.
+
+Ningun umbral aqui. Todo vive en src/config.py.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import time
+import re
+import sys
 from pathlib import Path
 
+from src.detectors import run_all as run_detectors
+from src.forensic.company import CompanyDerivationConflict, derive_company
+from src.forensic.promoter import promote
+from src.forensic.validator import validate
+from src.metrics.run_metrics import RunMetrics
+from src.tools.estate_access import EstateDB, EstateNotFoundError
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
+
+def _seed_from_path(path: Path, fallback: int) -> int:
+    m = re.search(r"(\d+)", path.stem)
+    return int(m.group(1)) if m else fallback
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m src.run")
     ap.add_argument("--estate", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--seed", type=int, default=0)
-    args = ap.parse_args()
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--company-rfc", type=str, default=None,
+                    help="RFC de la empresa auditada; si se omite, se deriva del estate.")
+    args = ap.parse_args(argv)
 
     if not args.estate.exists():
-        raise SystemExit(f"No existe el estate: {args.estate}")
+        print(f"No existe el estate: {args.estate}", file=sys.stderr)
+        return 2
 
-    started = time.time()
+    seed = args.seed if args.seed is not None else _seed_from_path(args.estate, 0)
 
-    # PENDIENTE: detectores -> leads -> investigator -> challenger -> validator
+    metrics = RunMetrics()
+    metrics.start()
+
     findings: list[dict] = []
     leads_not_pursued: list[dict] = []
 
+    try:
+        with EstateDB(args.estate) as db:
+            try:
+                company = derive_company(db, rfc_override=args.company_rfc)
+            except CompanyDerivationConflict as e:
+                print(f"[company-derivation] FAIL: {e}", file=sys.stderr)
+                return 3
+            print(f"[company-derivation] {company.evidence}", file=sys.stderr)
+
+            leads = run_detectors(db, company)
+            for lead in leads:
+                result = promote(lead, db, company)
+                if result.candidate is None:
+                    leads_not_pursued.append(_lead_to_dict(lead, result.reason))
+                    continue
+                verdict = validate(result.candidate, db)
+                if verdict.aprobado:
+                    findings.append(result.candidate)
+                else:
+                    leads_not_pursued.append(_lead_to_dict(lead, verdict.motivo))
+    except EstateNotFoundError as e:
+        print(f"[estate] {e}", file=sys.stderr)
+        return 2
+
+    metrics.stop()
+
+    findings.sort(key=_finding_sort_key)
+    leads_not_pursued.sort(key=_lead_sort_key)
+
     submission = {
-        "seed": args.seed,
+        "seed": seed,
         "findings": findings,
         "leads_not_pursued": leads_not_pursued,
-        "run_metadata": {
-            "llm_calls": 0,
-            "mxn_cost": 0.0,
-            "wall_clock_seconds": round(time.time() - started, 2),
-            "cost_by_role": {},
-            "deterministic": True,
-        },
+        "run_metadata": metrics.as_dict(),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(submission, indent=2, ensure_ascii=False),
-                        encoding="utf-8")
-    print(f"{args.out}  findings={len(findings)}  leads={len(leads_not_pursued)}")
+    args.out.write_text(
+        json.dumps(submission, indent=2, ensure_ascii=True, sort_keys=False),
+        encoding="utf-8",
+        newline="\n",
+    )
+    print(
+        f"{args.out}  findings={len(findings)}  leads={len(leads_not_pursued)}  "
+        f"seed={seed}"
+    )
     return 0
+
+
+def _lead_to_dict(lead, motivo: str) -> dict:
+    return {
+        "entity": lead.entity,
+        "signal": lead.signal,
+        "reason": f"{lead.reason} | Cerrado por validator: {motivo}",
+        "tool_calls_made": [lead.detector_id],
+        "closed_by": "validator",
+    }
+
+
+def _finding_sort_key(f: dict) -> tuple:
+    first_entity = (f.get("entities") or [""])[0]
+    return (f.get("scheme_type", ""), first_entity, -float(f.get("peso_amount", 0)))
+
+
+def _lead_sort_key(l: dict) -> tuple:
+    return (l.get("signal", ""), l.get("entity", ""))
 
 
 if __name__ == "__main__":
