@@ -57,7 +57,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-DEFAULT_SAT_CSV = REPO_ROOT / "Listado_completo_69-B.csv"
+DEFAULT_SAT_CSV = REPO_ROOT / "data" / "raw" / "Listado_completo_69-B.csv"
 DEFAULT_AMLSIM_TGZ = REPO_ROOT / "AMLSim" / "sample" / "20K_cycle200.tgz"
 DEFAULT_DB_DIR = REPO_ROOT / "data" / "estates"
 DEFAULT_GT_DIR = REPO_ROOT / "eval" / "answers"
@@ -385,7 +385,7 @@ class AMLSimSeed:
 # Estate builder
 # --------------------------------------------------------------------------
 
-SCHEMA_SQL = (REPO_ROOT / "student-materials" / "forensic-auditor" / "estate_schema.sql")
+SCHEMA_SQL = (REPO_ROOT / "docs" / "spec" / "estate_schema.sql")
 
 
 class Estate:
