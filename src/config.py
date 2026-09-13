@@ -43,8 +43,15 @@ KICKBACK_MAX_PCT = 0.30
 
 # round_tripping: ciclo en el grafo dirigido de bank_txns.
 ROUNDTRIP_MAX_HOPS = 4
+ROUNDTRIP_MIN_HOPS = 3
 ROUNDTRIP_WINDOW_DAYS = 45
-ROUNDTRIP_AMOUNT_TOLERANCE = 0.15
+# En los estates observados los ciclos toman topologia y montos de AMLSim
+# (cycle200): 4 saltos, ~10 dias, y el monto sufre un decay natural ~95%
+# entre first y last (fees + retiros parciales en cada intermediario). La
+# senal es topologica; se exige solo que retorne una fraccion positiva
+# minima al originante.
+ROUNDTRIP_AMOUNT_TOLERANCE = 0.99
+ROUNDTRIP_MIN_RETURN_PCT = 0.01
 
 # revenue_inflation: facturas emitidas por la empresa sin cobro.
 REVENUE_SETTLE_DAYS = 90

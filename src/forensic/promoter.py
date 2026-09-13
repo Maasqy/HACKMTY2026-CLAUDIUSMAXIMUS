@@ -32,6 +32,7 @@ from src.config import (
     GENERIC_CONCEPT_PATTERNS,
     KICKBACK_WINDOW_DAYS,
     PESO_TOLERANCE,
+    ROUNDTRIP_WINDOW_DAYS,
     VENDOR_FRESHNESS_DAYS,
 )
 from src.detectors.base import Lead
@@ -49,6 +50,7 @@ def promote(lead: Lead, db: EstateDB, company: CompanyIdentity) -> PromotionResu
     router = {
         "efos_match": _promote_efos_match,
         "kickback": _promote_kickback,
+        "round_tripping": _promote_round_tripping,
         # threshold_splitting existe como promoter (ver
         # _promote_threshold_splitting), pero sobre el sweep 1-50 subia falsas
         # acusaciones de 0 a 33. El plan es explicito: un detector no entra si
@@ -358,6 +360,140 @@ def _promote_kickback(
         "exhibits": exhibits,
         "money_trail": steps,
         "confidence": "proven",
+    }
+    return PromotionResult(candidate, "ok")
+
+
+def _promote_round_tripping(
+    lead: Lead, db: EstateDB, company: CompanyIdentity,
+) -> PromotionResult:
+    ctx = dict(lead.detector_context)
+    cycle_txn_ids = [x for x in ctx.get("cycle_txns", "").split(",") if x]
+    txns = [t for t in (db.obtener_transferencia(x) for x in cycle_txn_ids) if t is not None]
+    if len(txns) < 2 or len(txns) != len(cycle_txn_ids):
+        return PromotionResult(None, "no se pudieron cargar todos los bank_txns del ciclo.")
+
+    first = txns[0]
+    last = txns[-1]
+    if first.amount <= 0:
+        return PromotionResult(None, "monto inicial no positivo; no se puede reconciliar.")
+
+    # Intermediarios y sus duenos.
+    intermediates_clabes = [t.to_clabe for t in txns[:-1]]
+    owners = [db.resolver_clabe(c) for c in intermediates_clabes]
+
+    exhibits: list[dict] = []
+    exhibit_id_by_record: dict[tuple[str, str], str] = {}
+
+    def _add(source_table: str, record_id: str, note: str) -> str:
+        eid = f"E{len(exhibits) + 1}"
+        exhibits.append({
+            "exhibit_id": eid, "source_table": source_table,
+            "record_id": record_id, "note": note,
+        })
+        exhibit_id_by_record[(source_table, record_id)] = eid
+        return eid
+
+    for i, t in enumerate(txns):
+        if i == 0:
+            note = (
+                f"Salida de la empresa por ${t.amount:,.2f} MXN el {t.date} "
+                f"hacia CLABE {t.to_clabe}."
+            )
+        elif i == len(txns) - 1:
+            note = (
+                f"Retorno a la empresa por ${t.amount:,.2f} MXN el {t.date} "
+                f"desde CLABE {t.from_clabe}, cerrando el ciclo."
+            )
+        else:
+            note = (
+                f"Salto intermedio ${t.amount:,.2f} MXN el {t.date} de CLABE "
+                f"{t.from_clabe} a CLABE {t.to_clabe}."
+            )
+        _add("bank_txns", t.txn_id, note)
+
+    entities: list[str] = []
+    seen_entity: set[str] = set()
+    for owner in owners:
+        if owner.owner_type == "vendor":
+            v = db.obtener_proveedor(owner.owner_id)
+            if v is not None and (("vendors", v.rfc) not in exhibit_id_by_record):
+                _add(
+                    "vendors", v.rfc,
+                    f"Registro del proveedor {v.rfc} ({v.legal_name}) con "
+                    f"CLABE {v.bank_clabe or 'sin registro'}.",
+                )
+            key = f"RFC:{owner.owner_id}"
+            if key not in seen_entity:
+                seen_entity.add(key)
+                entities.append(key)
+        elif owner.owner_type == "employee":
+            emp = db.obtener_empleado(owner.owner_id)
+            if emp is not None and (("employees", emp.emp_id) not in exhibit_id_by_record):
+                _add(
+                    "employees", emp.emp_id,
+                    f"Registro del empleado {emp.emp_id} ({emp.name}, {emp.role}) "
+                    f"con CLABE {emp.bank_clabe}.",
+                )
+            key = f"EMP:{owner.owner_id.replace('EMP:', '')}"
+            if key not in seen_entity:
+                seen_entity.add(key)
+                entities.append(key)
+
+    if not entities:
+        return PromotionResult(
+            None,
+            "el ciclo pasa exclusivamente por CLABEs desconocidos (no vendors ni "
+            "employees registrados); sin contraparte identificable no se puede "
+            "acusar a nadie.",
+        )
+
+    # Money trail: un step por salto, orden cronologico.
+    steps: list[dict] = []
+    for t in txns:
+        from_entity = _clabe_to_entity(db, t.from_clabe, company)
+        to_entity = _clabe_to_entity(db, t.to_clabe, company)
+        steps.append({
+            "from": from_entity,
+            "to": to_entity,
+            "amount": round(t.amount, 2),
+            "date": t.date,
+            "exhibit_id": exhibit_id_by_record[("bank_txns", t.txn_id)],
+        })
+
+    span_days = int(ctx.get("span_days", "0") or 0)
+    delta_pct = abs(last.amount - first.amount) / first.amount
+    total_cycle = round(sum(t.amount for t in txns), 2)
+
+    primary_entity = entities[0]
+    intermediary_frag = (
+        f"y {len(entities) - 1} intermediario(s) adicional(es)"
+        if len(entities) > 1 else "sin intermediarios adicionales identificados"
+    )
+    narrative = (
+        f"En {span_days} dias la empresa envio ${first.amount:,.2f} MXN via "
+        f"{primary_entity} el {first.date} y recibio ${last.amount:,.2f} MXN "
+        f"de retorno el {last.date} tras {len(txns)} saltos "
+        f"(desviacion {delta_pct * 100:.1f}%, {intermediary_frag}). El flujo "
+        f"cierra un ciclo sobre el mismo CLABE de la empresa dentro de "
+        f"{ROUNDTRIP_WINDOW_DAYS} dias, patron caracteristico de simulacion "
+        f"de operaciones."
+    )
+
+    confidence = "proven" if delta_pct <= PESO_TOLERANCE else "probable"
+
+    candidate = {
+        "scheme_type": "round_tripping",
+        "entities": entities,
+        "narrative": narrative,
+        "rule_broken": (
+            "Simulacion de operaciones: los recursos regresan al originante sin "
+            "sustancia economica (CFF art. 69-B, operaciones inexistentes)."
+        ),
+        "peso_amount": total_cycle,
+        "exhibits": exhibits,
+        "money_trail": steps,
+        "confidence": confidence,
     }
     return PromotionResult(candidate, "ok")
 

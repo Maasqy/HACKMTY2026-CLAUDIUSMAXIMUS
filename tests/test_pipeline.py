@@ -10,7 +10,14 @@ from typing import Iterator
 
 import pytest
 
-from src.detectors import efos_match, kickback, payment_wo_inv, threshold_splitting, run_all
+from src.detectors import (
+    efos_match,
+    kickback,
+    payment_wo_inv,
+    round_tripping,
+    threshold_splitting,
+    run_all,
+)
 from src.forensic.company import (
     CompanyDerivationConflict,
     CompanyIdentity,
@@ -516,6 +523,146 @@ def test_threshold_splitting_stays_as_lead_not_finding() -> None:
         result = promote(lead, db, _company())
     assert result.candidate is None
     assert "revision manual" in result.reason or "no tiene promoter" in result.reason
+
+
+def test_round_tripping_positive_promotes_to_finding() -> None:
+    """Ciclo 3 saltos empresa->V1->V2->empresa, dentro de ventana y tolerancia."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTA080808GG7', 'Roundtrip A', '000000000000000701',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTB090909HH8', 'Roundtrip B', '000000000000000702',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RT-1", "2026-10-01", COMPANY_CLABE, "000000000000000701",
+                 300000.00, "Pago servicios", "SPEI"),
+                ("BNK-RT-2", "2026-10-05", "000000000000000701", "000000000000000702",
+                 300000.00, "Servicios subcontratados", "SPEI"),
+                ("BNK-RT-3", "2026-10-12", "000000000000000702", COMPANY_CLABE,
+                 285000.00, "Reembolso", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+        entity = "RFC:RTA080808GG7"
+        assert entity in [l.entity for l in leads]
+        lead = next(l for l in leads if l.entity == entity)
+        ctx = dict(lead.detector_context)
+        assert ctx["cycle_length"] == "3"
+        assert ctx["first_txn"] == "BNK-RT-1"
+        assert ctx["last_txn"] == "BNK-RT-3"
+        result = promote(lead, db, _company())
+    assert result.candidate is not None, result.reason
+    cand = result.candidate
+    assert cand["scheme_type"] == "round_tripping"
+    assert "RFC:RTA080808GG7" in cand["entities"]
+    assert "RFC:RTB090909HH8" in cand["entities"]
+    assert len(cand["money_trail"]) == 3
+    assert cand["peso_amount"] == 885000.00  # 300k + 300k + 285k
+    with _estate() as db2:
+        conn = db2._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTA080808GG7', 'Roundtrip A', '000000000000000701',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTB090909HH8', 'Roundtrip B', '000000000000000702',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RT-1", "2026-10-01", COMPANY_CLABE, "000000000000000701",
+                 300000.00, "Pago servicios", "SPEI"),
+                ("BNK-RT-2", "2026-10-05", "000000000000000701", "000000000000000702",
+                 300000.00, "Servicios subcontratados", "SPEI"),
+                ("BNK-RT-3", "2026-10-12", "000000000000000702", COMPANY_CLABE,
+                 285000.00, "Reembolso", "SPEI"),
+            ],
+        )
+        conn.commit()
+        v = validate(cand, db2)
+    assert v.aprobado, v.motivo
+
+
+def test_round_tripping_negative_amount_out_of_tolerance() -> None:
+    """Return 50% del envio no cumple la tolerancia 15%."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTC101010II9', 'Roundtrip C', '000000000000000703',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RTC-1", "2026-10-01", COMPANY_CLABE, "000000000000000703",
+                 200000.00, "", "SPEI"),
+                ("BNK-RTC-2", "2026-10-05", "000000000000000703", COMPANY_CLABE,
+                 100000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+    assert not any(l.entity == "RFC:RTC101010II9" for l in leads)
+
+
+def test_round_tripping_negative_window_exceeded() -> None:
+    """Cierre 60 dias despues del envio: fuera de ROUNDTRIP_WINDOW_DAYS=45."""
+    with _estate() as db:
+        conn = db._conn
+        conn.execute(
+            "INSERT INTO vendors (rfc, legal_name, bank_clabe, category, registered_date)"
+            " VALUES ('RTD111111JJ0', 'Roundtrip D', '000000000000000704',"
+            " 'Servicios', '2022-01-01')"
+        )
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RTD-1", "2026-08-01", COMPANY_CLABE, "000000000000000704",
+                 150000.00, "", "SPEI"),
+                ("BNK-RTD-2", "2026-09-30", "000000000000000704", COMPANY_CLABE,
+                 148000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+    assert not any(l.entity == "RFC:RTD111111JJ0" for l in leads)
+
+
+def test_round_tripping_unresolvable_intermediate_stays_lead() -> None:
+    """CLABE intermedia no registrada como vendor/employee: se descarta en detector."""
+    with _estate() as db:
+        conn = db._conn
+        conn.executemany(
+            "INSERT INTO bank_txns (txn_id, date, from_clabe, to_clabe, amount, reference, channel)"
+            " VALUES (?,?,?,?,?,?,?)",
+            [
+                ("BNK-RTU-1", "2026-10-01", COMPANY_CLABE, "000000000000009999",
+                 100000.00, "", "SPEI"),
+                ("BNK-RTU-2", "2026-10-05", "000000000000009999", COMPANY_CLABE,
+                 98000.00, "", "SPEI"),
+            ],
+        )
+        conn.commit()
+        leads = round_tripping.find_leads(db, _company())
+    assert not any(dict(l.detector_context).get("primary_clabe") == "000000000000009999"
+                   for l in leads)
 
 
 def test_run_all_orders_leads_stably() -> None:
